@@ -1,0 +1,86 @@
+{{define "title"}}{{.Row.QueryID}} · Trino Query Log{{end}}
+{{define "content"}}
+{{$r := .Row}}
+<div class="detail-head">
+  <a href="/">← back</a>
+  <h1>{{$r.QueryID}}</h1>
+  {{stateBadge $r.QueryState}}
+  {{if $r.QueryType}}<span class="meta">{{$r.QueryType}}</span>{{end}}
+</div>
+
+<div class="meta">
+  user <strong>{{$r.UserName}}</strong>
+  {{if $r.Source}}· source {{$r.Source}}{{end}}
+  {{if $r.Catalog}}· catalog {{$r.Catalog}}{{end}}
+  {{if $r.SchemaName}}· schema {{$r.SchemaName}}{{end}}
+  · started {{tsp $r.ExecutionStartTime $r.CreateTime}}
+</div>
+
+<div class="cards">
+  <div class="card"><div class="k">Wall</div><div class="v">{{msH $r.WallMS}}</div></div>
+  <div class="card"><div class="k">CPU</div><div class="v">{{msH $r.CPUMS}}</div></div>
+  <div class="card"><div class="k">Queued</div><div class="v">{{msH $r.QueuedMS}}</div></div>
+  <div class="card"><div class="k">Bytes scanned</div><div class="v">{{bytesH $r.PhysicalInputBytes}}</div></div>
+  <div class="card"><div class="k">Peak user mem</div><div class="v">{{bytesH $r.PeakUserMemoryBytes}}</div></div>
+  <div class="card"><div class="k">Peak total mem</div><div class="v">{{bytesH $r.PeakTotalMemoryBytes}}</div></div>
+  <div class="card"><div class="k">Output rows</div><div class="v">{{num $r.OutputRows}}</div></div>
+  <div class="card"><div class="k">Written rows</div><div class="v">{{num $r.WrittenRows}}</div></div>
+  <div class="card"><div class="k">Splits</div><div class="v">{{num $r.CompletedSplits}}</div></div>
+</div>
+
+{{if $r.ErrorCode}}
+<h2 class="section">Failure</h2>
+<div class="errbox">
+  <div><strong>{{$r.ErrorCode}}</strong>{{if $r.ErrorType}} <span class="meta">({{$r.ErrorType}})</span>{{end}}</div>
+  {{if $r.ErrorMessage}}<pre class="code">{{$r.ErrorMessage}}</pre>{{end}}
+</div>
+{{end}}
+
+<h2 class="section">SQL</h2>
+<pre class="code">{{$r.QueryText}}</pre>
+
+<h2 class="section">Statistics</h2>
+<table class="kv">
+  <tr><td class="k">Analysis time</td><td>{{msH $r.AnalysisMS}}</td></tr>
+  <tr><td class="k">Planning time</td><td>{{msH $r.PlanningMS}}</td></tr>
+  <tr><td class="k">Execution time</td><td>{{msH $r.ExecutionMS}}</td></tr>
+  <tr><td class="k">Physical input</td><td>{{bytesH $r.PhysicalInputBytes}} · {{num $r.PhysicalInputRows}} rows</td></tr>
+  <tr><td class="k">Processed input</td><td>{{bytesH $r.ProcessedInputBytes}} · {{num $r.ProcessedInputRows}} rows</td></tr>
+  <tr><td class="k">Output</td><td>{{bytesH $r.OutputBytes}} · {{num $r.OutputRows}} rows</td></tr>
+  <tr><td class="k">Written</td><td>{{bytesH $r.WrittenBytes}} · {{num $r.WrittenRows}} rows</td></tr>
+  <tr><td class="k">Create / start / end</td><td>{{ts $r.CreateTime}} · {{tsOpt $r.ExecutionStartTime}} · {{tsOpt $r.EndTime}}</td></tr>
+  {{if $r.ResourceGroup}}<tr><td class="k">Resource group</td><td>{{$r.ResourceGroup}}</td></tr>{{end}}
+  {{if $r.ClientTags}}<tr><td class="k">Client tags</td><td>{{$r.ClientTags}}</td></tr>{{end}}
+  {{if $r.UpdateType}}<tr><td class="k">Update type</td><td>{{$r.UpdateType}}</td></tr>{{end}}
+  {{if $r.ServerVersion}}<tr><td class="k">Server version</td><td>{{$r.ServerVersion}}</td></tr>{{end}}
+  {{if $r.Environment}}<tr><td class="k">Environment</td><td>{{$r.Environment}}</td></tr>{{end}}
+</table>
+
+{{if .Inputs}}
+<h2 class="section">Input tables</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Catalog</th><th>Schema</th><th>Table</th><th class="num">Bytes</th><th class="num">Rows</th></tr></thead>
+  <tbody>
+    {{range .Inputs}}
+    <tr>
+      <td>{{.CatalogName}}</td><td>{{.Schema}}</td><td>{{.Table}}</td>
+      <td class="num">{{bytesHp .PhysicalInputBytes}}</td>
+      <td class="num">{{nump .PhysicalInputRows}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+
+{{if $r.Plan}}
+<h2 class="section">Plan</h2>
+<pre class="code">{{$r.Plan}}</pre>
+{{end}}
+
+{{if $r.JSONPlan}}
+<h2 class="section">JSON plan</h2>
+<pre class="code">{{$r.JSONPlan}}</pre>
+{{end}}
+{{end}}

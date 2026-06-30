@@ -1,0 +1,44 @@
+# One-shot Job that applies the schema + table DDL via Trino. Run it once before
+# first deploy (or rely on the shipped ddl/trino_query_log.sql applied manually).
+# Requires the configured TRINO_USER to have CREATE privileges in the catalog.
+#
+#   kubectl apply -f deploy/k8s/job-init.yaml
+#   kubectl -n trino wait --for=condition=complete job/trino-query-log-sink-init
+#   kubectl -n trino delete job trino-query-log-sink-init   # optional cleanup
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trino-query-log-sink-init
+  namespace: trino
+  labels:
+    app.kubernetes.io/name: trino-query-log-sink
+    app.kubernetes.io/component: init
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trino-query-log-sink
+        app.kubernetes.io/component: init
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: init
+          image: ghcr.io/shadi/trino-query-log-sink:latest
+          args: ["init"]
+          envFrom:
+            - configMapRef:
+                name: trino-query-log-sink
+            - secretRef:
+                name: trino-query-log-sink
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

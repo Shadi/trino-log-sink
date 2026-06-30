@@ -1,0 +1,40 @@
+{{define "content"}}
+<form class="filters" action="/" method="get"
+      hx-get="/partials/queries" hx-target="#results" hx-trigger="submit, change">
+  <div class="field">
+    <label for="range">Time range</label>
+    <select id="range" name="range">
+      {{range .Ranges}}<option value="{{.Value}}" {{if eq .Value $.Range}}selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="user">User</label>
+    <input id="user" name="user" value="{{.User}}" placeholder="any" autocomplete="off">
+  </div>
+  <div class="field">
+    <label for="catalog">Catalog</label>
+    <input id="catalog" name="catalog" value="{{.Catalog}}" placeholder="any" autocomplete="off">
+  </div>
+  <div class="field">
+    <label for="state">State</label>
+    <select id="state" name="state">
+      {{range .States}}<option value="{{.}}" {{if eq . $.State}}selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>{{end}}
+    </select>
+  </div>
+  <input type="hidden" name="sort" value="{{.Sort}}">
+  <input type="hidden" name="dir" value="{{.Dir}}">
+  <button type="submit" class="btn-primary">Apply</button>
+  <a class="btn" href="/">Reset</a>
+</form>
+
+<div class="topby">
+  <span class="label">Top by</span>
+  <a class="btn {{if eq .Sort "wall"}}active{{end}}" href="{{topHref . "wall"}}" hx-get="{{topHrefPartial . "wall"}}" hx-target="#results">Wall time</a>
+  <a class="btn {{if eq .Sort "cpu"}}active{{end}}" href="{{topHref . "cpu"}}" hx-get="{{topHrefPartial . "cpu"}}" hx-target="#results">CPU time</a>
+  <a class="btn {{if eq .Sort "bytes"}}active{{end}}" href="{{topHref . "bytes"}}" hx-get="{{topHrefPartial . "bytes"}}" hx-target="#results">Bytes scanned</a>
+  <a class="btn {{if eq .Sort "mem"}}active{{end}}" href="{{topHref . "mem"}}" hx-get="{{topHrefPartial . "mem"}}" hx-target="#results">Peak memory</a>
+  <a class="btn {{if .FailedOnly}}active{{end}}" href="{{failedHref .}}" hx-get="{{failedHrefPartial .}}" hx-target="#results">Failed only</a>
+</div>
+
+<div id="results">{{template "results" .}}</div>
+{{end}}

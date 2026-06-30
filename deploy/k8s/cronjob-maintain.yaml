@@ -1,0 +1,55 @@
+# Iceberg table maintenance: compaction + snapshot/orphan cleanup. Writing the
+# query log through Trino produces many small files and one snapshot per flush;
+# without this the table accumulates small files and the prune DELETEs never
+# reclaim object-store space. Schedule off-peak and after the prune job.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trino-query-log-sink-maintain
+  namespace: trino
+  labels:
+    app.kubernetes.io/name: trino-query-log-sink
+    app.kubernetes.io/component: maintain
+spec:
+  # Daily at 03:30, after the 03:00 prune job.
+  schedule: "30 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: trino-query-log-sink
+            app.kubernetes.io/component: maintain
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: maintain
+              image: ghcr.io/shadi/trino-query-log-sink:latest
+              args: ["maintain"]
+              envFrom:
+                - configMapRef:
+                    name: trino-query-log-sink
+                - secretRef:
+                    name: trino-query-log-sink
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+                limits:
+                  cpu: 500m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

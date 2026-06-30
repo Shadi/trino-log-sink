@@ -1,0 +1,16 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{block "title" .}}Trino Query Log{{end}}</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a href="/" class="brand">Trino Query Log</a>
+</header>
+<main>{{template "content" .}}</main>
+</body>
+</html>{{end}}

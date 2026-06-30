@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "queryId": "20240115_104500_00099_z9y8x",
+    "query": "SELECT * FROM lakehouse.retail.nonexistent",
+    "queryState": "FAILED",
+    "tables": [],
+    "routines": [],
+    "uri": "http://trino-coordinator:8080/ui/query.html?20240115_104500_00099_z9y8x"
+  },
+  "statistics": {
+    "cpuTime": "PT0.012S",
+    "failedCpuTime": "PT0.012S",
+    "wallTime": "PT0.080S",
+    "queuedTime": "PT0.005S",
+    "analysisTime": "PT0.040S",
+    "planningTime": "PT0S",
+    "executionTime": "PT0S",
+    "peakUserMemoryBytes": 0,
+    "peakTaskTotalMemory": 0,
+    "physicalInputBytes": 0,
+    "physicalInputRows": 0,
+    "processedInputBytes": 0,
+    "processedInputRows": 0,
+    "outputBytes": 0,
+    "outputRows": 0,
+    "writtenBytes": 0,
+    "writtenRows": 0,
+    "completedSplits": 0
+  },
+  "context": {
+    "user": "bob",
+    "clientTags": [],
+    "source": "trino-cli",
+    "timezone": "UTC",
+    "catalog": "lakehouse",
+    "schema": "retail",
+    "resourceGroupId": ["global", "adhoc", "bob"],
+    "sessionProperties": {},
+    "serverVersion": "478",
+    "environment": "production",
+    "queryType": "SELECT",
+    "retryPolicy": "TASK"
+  },
+  "ioMetadata": {"inputs": []},
+  "failureInfo": {
+    "errorCode": {"code": 44, "name": "TABLE_NOT_FOUND", "type": "USER_ERROR", "fatal": false},
+    "failureType": "io.trino.spi.TrinoException",
+    "failureMessage": "line 1:15: Table 'lakehouse.retail.nonexistent' does not exist",
+    "failuresJson": "[]"
+  },
+  "warnings": [],
+  "createTime": "2024-01-15T10:45:00.000Z",
+  "executionStartTime": "2024-01-15T10:45:00.045Z",
+  "endTime": "2024-01-15T10:45:00.080Z"
+}

@@ -1,0 +1,42 @@
+{{define "results"}}
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+<div class="meta">{{.Count}} queries · {{.RangeLabel}}{{if .Truncated}} · showing newest {{.Count}} (result limit reached){{end}}</div>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>{{sortlink . "start" "Start"}}</th>
+      <th>User</th>
+      <th>State</th>
+      <th>Catalog</th>
+      <th>Type</th>
+      <th class="num">{{sortlink . "wall" "Wall"}}</th>
+      <th class="num">{{sortlink . "cpu" "CPU"}}</th>
+      <th class="num">{{sortlink . "bytes" "Scanned"}}</th>
+      <th class="num">{{sortlink . "mem" "Peak Mem"}}</th>
+      <th class="num">{{sortlink . "rows" "Out Rows"}}</th>
+      <th>Query</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr>
+      <td>{{tsp .ExecutionStartTime .CreateTime}}</td>
+      <td>{{.UserName}}</td>
+      <td>{{stateBadge .QueryState}}</td>
+      <td>{{.Catalog}}</td>
+      <td>{{.QueryType}}</td>
+      <td class="num">{{msH .WallMS}}</td>
+      <td class="num">{{msH .CPUMS}}</td>
+      <td class="num">{{bytesH .PhysicalInputBytes}}</td>
+      <td class="num">{{bytesH .PeakUserMemoryBytes}}</td>
+      <td class="num">{{num .OutputRows}}</td>
+      <td class="q"><a href="/query/{{.QueryID}}" title="{{.QueryPreview}}">{{.QueryPreview}}</a></td>
+    </tr>
+    {{else}}
+    <tr><td colspan="11" class="empty">No queries match these filters.</td></tr>
+    {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}

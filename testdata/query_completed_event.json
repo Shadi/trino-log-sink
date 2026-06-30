@@ -1,0 +1,79 @@
+{
+  "metadata": {
+    "queryId": "20240115_103000_00042_a1b2c",
+    "transactionId": "b7e1c2d3-0000-4444-8888-000000000001",
+    "query": "SELECT c.customer_id, count(*) AS orders\nFROM lakehouse.retail.orders o\nJOIN lakehouse.retail.customers c ON c.customer_id = o.customer_id\nWHERE o.created_at >= DATE '2024-01-01'\nGROUP BY 1\nORDER BY 2 DESC\nLIMIT 100",
+    "updateType": null,
+    "preparedQuery": null,
+    "queryState": "FINISHED",
+    "tables": [
+      {"catalog": "lakehouse", "schema": "retail", "table": "orders", "authorization": "alice", "filters": [], "columns": [{"column": "customer_id"}, {"column": "created_at"}], "directlyReferenced": true},
+      {"catalog": "lakehouse", "schema": "retail", "table": "customers", "authorization": "alice", "filters": [], "columns": [{"column": "customer_id"}], "directlyReferenced": true}
+    ],
+    "routines": [],
+    "uri": "http://trino-coordinator:8080/ui/query.html?20240115_103000_00042_a1b2c",
+    "plan": "Fragment 0 [SINGLE]\n  Output[customer_id, orders]\n    - TopN[100, orders DESC]\n      - Aggregate[customer_id]\n        - InnerJoin[c.customer_id = o.customer_id]\n          - TableScan[lakehouse:retail.orders]\n          - TableScan[lakehouse:retail.customers]",
+    "jsonPlan": "{\"0\":{\"name\":\"Output\",\"children\":[]}}"
+  },
+  "statistics": {
+    "cpuTime": "PT12.430S",
+    "failedCpuTime": "PT0S",
+    "wallTime": "PT3.870S",
+    "queuedTime": "PT0.042S",
+    "scheduledTime": "PT9.110S",
+    "analysisTime": "PT0.210S",
+    "planningTime": "PT0.330S",
+    "executionTime": "PT3.480S",
+    "peakUserMemoryBytes": 268435456,
+    "peakTaskUserMemory": 134217728,
+    "peakTaskTotalMemory": 201326592,
+    "physicalInputBytes": 1073741824,
+    "physicalInputRows": 48000000,
+    "processedInputBytes": 1073741824,
+    "processedInputRows": 48000000,
+    "internalNetworkBytes": 5242880,
+    "internalNetworkRows": 120000,
+    "totalBytes": 1073741824,
+    "outputBytes": 8192,
+    "outputRows": 100,
+    "writtenBytes": 0,
+    "writtenRows": 0,
+    "cumulativeMemory": 1.23456789E9,
+    "completedSplits": 256,
+    "stageGcStatistics": [],
+    "operatorSummaries": []
+  },
+  "context": {
+    "user": "alice",
+    "originalUser": "alice",
+    "originalRoles": [],
+    "principal": "alice@example.com",
+    "enabledRoles": [],
+    "groups": [],
+    "clientTags": ["team:analytics", "tool:bi"],
+    "clientCapabilities": [],
+    "source": "bi-tool",
+    "timezone": "UTC",
+    "catalog": "lakehouse",
+    "schema": "retail",
+    "resourceGroupId": ["global", "adhoc", "alice"],
+    "sessionProperties": {"query_max_run_time": "1h"},
+    "resourceEstimates": {},
+    "serverAddress": "trino-coordinator:8080",
+    "serverVersion": "478",
+    "environment": "production",
+    "queryType": "SELECT",
+    "retryPolicy": "TASK"
+  },
+  "ioMetadata": {
+    "inputs": [
+      {"connectorName": "iceberg", "catalogName": "lakehouse", "schema": "retail", "table": "orders", "columns": [{"name": "customer_id", "type": "bigint"}, {"name": "created_at", "type": "date"}], "physicalInputBytes": 1006632960, "physicalInputRows": 45000000},
+      {"connectorName": "iceberg", "catalogName": "lakehouse", "schema": "retail", "table": "customers", "columns": [{"name": "customer_id", "type": "bigint"}], "physicalInputBytes": 67108864, "physicalInputRows": 3000000}
+    ],
+    "output": null
+  },
+  "warnings": [],
+  "createTime": "2024-01-15T10:30:00.000Z",
+  "executionStartTime": "2024-01-15T10:30:00.390Z",
+  "endTime": "2024-01-15T10:30:03.870Z"
+}

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-query-log-sink
+  namespace: trino
+  labels:
+    app.kubernetes.io/name: trino-query-log-sink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trino-query-log-sink
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trino-query-log-sink
+    spec:
+      # Allow the in-flight HTTP drain + buffer flush to finish on shutdown.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sink
+          # Replace with your published image.
+          image: ghcr.io/shadi/trino-query-log-sink:latest
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: trino-query-log-sink
+            - secretRef:
+                name: trino-query-log-sink
+          lifecycle:
+            # Hold the container briefly on termination so the Service endpoint
+            # is removed before the process stops accepting. Native sleep action
+            # needs k8s >= 1.29 (the distroless image has no shell for an exec hook).
+            preStop:
+              sleep:
+                seconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

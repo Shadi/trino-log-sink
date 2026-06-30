@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-query-log-sink
+  namespace: trino
+  labels:
+    app.kubernetes.io/name: trino-query-log-sink
+data:
+  LISTEN_ADDR: ":8080"
+  # Trino coordinator this service reads from and writes to.
+  TRINO_HOST: "trino-cluster-trino.trino"
+  TRINO_PORT: "8080"
+  TRINO_USER: "trino-query-log"
+  # Session source used to tag this service's own queries so they are excluded
+  # from the log (feedback-loop suppression).
+  TRINO_SOURCE: "trino-query-log"
+  # Iceberg target. Dedicated catalog/bucket for the query log (separate from the
+  # gravitino lakehouse catalog).
+  TRINO_CATALOG: "querylog"
+  TRINO_SCHEMA: "observability"
+  TRINO_TABLE: "trino_query_log"
+  # Iceberg warehouse location used by the `init` subcommand / DDL. Replace the
+  # bucket, or leave empty if the catalog already has a warehouse configured.
+  ICEBERG_LOCATION: ""
+  # Batching. FLUSH_INTERVAL is the max lag before a partial batch is written;
+  # 30s keeps Iceberg commit/file counts low for a human-facing browse UI.
+  BATCH_SIZE: "100"
+  FLUSH_INTERVAL: "30s"
+  BUFFER_CAPACITY: "10000"
+  FLUSH_MAX_RETRIES: "3"
+  # Retention (prune CronJob) and Iceberg maintenance (maintain CronJob).
+  RETENTION_DAYS: "7"
+  MAINTAIN_RETENTION: "7d"
+  # Observability.
+  METRICS_ENABLED: "true"
+  LOG_LEVEL: "info"
