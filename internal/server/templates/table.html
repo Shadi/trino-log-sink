@@ -1,6 +1,6 @@
 {{define "results"}}
 {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
-<div class="meta">{{.Count}} queries · {{.RangeLabel}}{{if .Truncated}} · showing newest {{.Count}} (result limit reached){{end}}</div>
+<div class="meta">{{.Count}} queries · {{.RangeLabel}}{{if gt .Page 1}} · page {{.Page}}{{end}}</div>
 <div class="table-wrap">
 <table>
   <thead>
@@ -39,4 +39,11 @@
   </tbody>
 </table>
 </div>
+{{if or .HasPrev .HasNext}}
+<div class="pager">
+  {{if .HasPrev}}<a class="btn" href="{{prevHref .}}" hx-get="{{prevHrefPartial .}}" hx-target="#results">← newer</a>{{end}}
+  <span class="label">page {{.Page}}</span>
+  {{if .HasNext}}<a class="btn" href="{{nextHref .}}" hx-get="{{nextHrefPartial .}}" hx-target="#results">older →</a>{{end}}
+</div>
+{{end}}
 {{end}}
