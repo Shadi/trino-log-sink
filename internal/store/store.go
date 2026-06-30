@@ -21,8 +21,10 @@ type Store interface {
 	GetQuery(ctx context.Context, queryID string) (*Row, error)
 	// Prune deletes rows whose create_time is strictly before olderThan.
 	Prune(ctx context.Context, olderThan time.Time) error
-	// Maintain compacts files and reclaims space via Iceberg procedures.
+	// Maintain reclaims space via Iceberg expire_snapshots + remove_orphan_files.
 	Maintain(ctx context.Context, retentionThreshold string) error
+	// Optimize compacts data files whose create_time is at or after since.
+	Optimize(ctx context.Context, since time.Time) error
 	Close() error
 }
 
@@ -177,6 +179,7 @@ type QueryFilter struct {
 	Sort    SortKey
 	Desc    bool
 	Limit   int
+	Offset  int
 }
 
 func timeArg(t *time.Time) any {

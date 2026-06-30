@@ -76,6 +76,10 @@ func New(cfg config.Config, st store.Store, buf Enqueuer, metrics *observability
 			"topHrefPartial":    topHrefPartial,
 			"failedHref":        failedHref,
 			"failedHrefPartial": failedHrefPartial,
+			"prevHref":          prevHref,
+			"prevHrefPartial":   prevHrefPartial,
+			"nextHref":          nextHref,
+			"nextHrefPartial":   nextHrefPartial,
 		}
 		parse := func(files ...string) *template.Template {
 			return template.Must(template.New("base").Funcs(funcs).ParseFS(assets, files...))

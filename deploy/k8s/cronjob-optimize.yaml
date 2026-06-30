@@ -1,25 +1,28 @@
+# Frequent compaction of the recent (OPTIMIZE_DAYS) partitions. Each flush writes
+# one small Parquet file; without regular compaction the hot partition accumulates
+# many tiny files and UI reads get slow. Runs hourly, scoped to recent days so it
+# stays cheap.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: trino-query-log-sink-prune
+  name: trino-query-log-sink-optimize
   namespace: trino
   labels:
     app.kubernetes.io/name: trino-query-log-sink
-    app.kubernetes.io/component: prune
+    app.kubernetes.io/component: optimize
 spec:
-  # Daily at 03:00. Deletes rows older than RETENTION_DAYS.
-  schedule: "0 3 * * *"
+  schedule: "15 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
-      backoffLimit: 2
+      backoffLimit: 1
       template:
         metadata:
           labels:
             app.kubernetes.io/name: trino-query-log-sink
-            app.kubernetes.io/component: prune
+            app.kubernetes.io/component: optimize
         spec:
           restartPolicy: OnFailure
           securityContext:
@@ -29,9 +32,9 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           containers:
-            - name: prune
+            - name: optimize
               image: ghcr.io/shadi/trino-log-sink:latest
-              args: ["prune"]
+              args: ["optimize"]
               envFrom:
                 - configMapRef:
                     name: trino-query-log-sink
@@ -42,7 +45,7 @@ spec:
                   cpu: 25m
                   memory: 32Mi
                 limits:
-                  cpu: 250m
+                  cpu: 500m
                   memory: 128Mi
               securityContext:
                 allowPrivilegeEscalation: false

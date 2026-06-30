@@ -30,9 +30,10 @@ func (f *fakeStore) GetQuery(_ context.Context, id string) (*store.Row, error) {
 	}
 	return nil, nil
 }
-func (f *fakeStore) Prune(context.Context, time.Time) error { return nil }
-func (f *fakeStore) Maintain(context.Context, string) error { return nil }
-func (f *fakeStore) Close() error                           { return nil }
+func (f *fakeStore) Prune(context.Context, time.Time) error    { return nil }
+func (f *fakeStore) Maintain(context.Context, string) error    { return nil }
+func (f *fakeStore) Optimize(context.Context, time.Time) error { return nil }
+func (f *fakeStore) Close() error                              { return nil }
 
 type fakeEnqueuer struct {
 	mu   sync.Mutex

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultListLimit = 500
+	defaultListLimit = 100
 	maxListLimit     = 5000
 )
 
@@ -196,6 +196,16 @@ func (s *TrinoStore) ListQueries(ctx context.Context, f QueryFilter) ([]QuerySum
 	sb.WriteString(quoteIdent(sortCol))
 	sb.WriteString(" ")
 	sb.WriteString(dir)
+	if sortCol != "query_id" {
+		sb.WriteString(", ")
+		sb.WriteString(quoteIdent("query_id"))
+		sb.WriteString(" ")
+		sb.WriteString(dir)
+	}
+	if f.Offset > 0 {
+		sb.WriteString(" OFFSET ")
+		sb.WriteString(strconv.Itoa(f.Offset))
+	}
 	sb.WriteString(" LIMIT ")
 	sb.WriteString(strconv.Itoa(limit))
 
@@ -221,8 +231,15 @@ func (s *TrinoStore) ListQueries(ctx context.Context, f QueryFilter) ([]QuerySum
 }
 
 func (s *TrinoStore) GetQuery(ctx context.Context, queryID string) (*Row, error) {
-	stmt := "SELECT " + s.rowSelectList + " FROM " + s.table + " WHERE " + quoteIdent("query_id") + " = ? LIMIT 1"
-	rows, err := s.db.QueryContext(ctx, stmt, queryID)
+	where := quoteIdent("query_id") + " = ?"
+	args := []any{queryID}
+	if day, ok := queryIDDay(queryID); ok {
+		where += " AND " + quoteIdent("create_time") + " >= ? AND " + quoteIdent("create_time") + " < ?"
+		args = append(args, day.AddDate(0, 0, -1), day.AddDate(0, 0, 2))
+	}
+
+	stmt := "SELECT " + s.rowSelectList + " FROM " + s.table + " WHERE " + where + " LIMIT 1"
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get query %s: %w", queryID, err)
 	}
@@ -254,13 +271,21 @@ func (s *TrinoStore) Prune(ctx context.Context, olderThan time.Time) error {
 	return nil
 }
 
+func (s *TrinoStore) Optimize(ctx context.Context, since time.Time) error {
+	lit := since.UTC().Format("2006-01-02 15:04:05.000")
+	stmt := "ALTER TABLE " + s.table + " EXECUTE optimize WHERE " + quoteIdent("create_time") + " >= TIMESTAMP '" + lit + " UTC'"
+	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("optimize since %s: %w", lit, err)
+	}
+	return nil
+}
+
 func (s *TrinoStore) Maintain(ctx context.Context, retentionThreshold string) error {
 	thr := "'" + strings.ReplaceAll(retentionThreshold, "'", "''") + "'"
 	steps := []struct {
 		name string
 		stmt string
 	}{
-		{"optimize", "ALTER TABLE " + s.table + " EXECUTE optimize"},
 		{"expire_snapshots", "ALTER TABLE " + s.table + " EXECUTE expire_snapshots(retention_threshold => " + thr + ")"},
 		{"remove_orphan_files", "ALTER TABLE " + s.table + " EXECUTE remove_orphan_files(retention_threshold => " + thr + ")"},
 	}

@@ -8,7 +8,8 @@
 //	ui        run only the read UI (read path)
 //	init      apply the schema/table DDL once
 //	prune     delete rows older than RETENTION_DAYS (run as a CronJob)
-//	maintain  compact files and reclaim space via Iceberg procedures (CronJob)
+//	optimize  compact recent partitions' files (frequent CronJob)
+//	maintain  expire snapshots + remove orphan files (nightly CronJob)
 //	ddl       print the DDL to stdout
 package main
 
@@ -66,6 +67,8 @@ func run() error {
 		return initDDL(cfg, log)
 	case "prune":
 		return runPrune(cfg, log)
+	case "optimize":
+		return runOptimize(cfg, log)
 	case "maintain":
 		return runMaintain(cfg, log)
 	case "ddl":
@@ -84,7 +87,8 @@ func usage() {
   ui        run only the read UI (read path)
   init      apply the schema/table DDL once
   prune     delete rows older than RETENTION_DAYS
-  maintain  compact files and reclaim space via Iceberg procedures
+  optimize  compact recent partitions' files
+  maintain  expire snapshots + remove orphan files
   ddl       print the DDL to stdout
 
 Configuration is read from environment variables (see README).
@@ -141,7 +145,7 @@ func runServer(cfg *config.Config, log *slog.Logger, opts server.Options) error 
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      cfg.Trino.QueryTimeout + 15*time.Second,
 	}
 
 	serverErr := make(chan error, 1)
@@ -235,6 +239,24 @@ func runMaintain(cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	log.Info("maintenance complete")
+	return nil
+}
+
+func runOptimize(cfg *config.Config, log *slog.Logger) error {
+	st, err := store.New(cfg.Trino)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	since := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -cfg.OptimizeDays)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	log.Info("optimizing table", "table", cfg.Trino.Table, "since", since.Format(time.RFC3339))
+	if err := st.Optimize(ctx, since); err != nil {
+		return err
+	}
+	log.Info("optimize complete")
 	return nil
 }
 

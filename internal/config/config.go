@@ -37,6 +37,7 @@ type Config struct {
 	RetentionDays int
 
 	MaintainRetention string
+	OptimizeDays      int
 
 	MetricsEnabled bool
 	LogLevel       string
@@ -68,6 +69,7 @@ func Load() (*Config, error) {
 		FlushMaxRetries:   e.intVal("FLUSH_MAX_RETRIES", 3),
 		RetentionDays:     e.intVal("RETENTION_DAYS", 7),
 		MaintainRetention: e.str("MAINTAIN_RETENTION", "7d"),
+		OptimizeDays:      e.intVal("OPTIMIZE_DAYS", 1),
 		MetricsEnabled:    e.boolVal("METRICS_ENABLED", true),
 		LogLevel:          e.str("LOG_LEVEL", "info"),
 		IcebergLocation:   e.str("ICEBERG_LOCATION", ""),
@@ -99,6 +101,7 @@ func (c *Config) validate() []error {
 	add(c.BufferCapacity < 1, "BUFFER_CAPACITY must be >= 1")
 	add(c.FlushMaxRetries < 0, "FLUSH_MAX_RETRIES must be >= 0")
 	add(c.RetentionDays < 0, "RETENTION_DAYS must be >= 0")
+	add(c.OptimizeDays < 0, "OPTIMIZE_DAYS must be >= 0")
 
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":

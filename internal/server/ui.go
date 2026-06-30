@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +15,10 @@ import (
 	"github.com/Shadi/trino-query-log-sink/internal/store"
 )
 
-const uiLimit = 500
+const (
+	uiLimit    = 100
+	maxUIPages = 50
+)
 
 type rangeOption struct{ Value, Label string }
 
@@ -67,8 +71,10 @@ type listView struct {
 	Dir        string
 	FailedOnly bool
 	Count      int
-	Truncated  bool
 	Error      string
+	Page       int
+	HasPrev    bool
+	HasNext    bool
 }
 
 type detailView struct {
@@ -80,7 +86,7 @@ func (s *Server) buildListView(q url.Values) (*listView, store.QueryFilter) {
 	rng := q.Get("range")
 	dur, label, ok := rangeInfo(rng)
 	if !ok {
-		rng = "7d"
+		rng = "24h"
 		dur, label, _ = rangeInfo(rng)
 	}
 	until := time.Now().UTC()
@@ -99,14 +105,23 @@ func (s *Server) buildListView(q url.Values) (*listView, store.QueryFilter) {
 		dir = "asc"
 	}
 
+	page := 1
+	if p, err := strconv.Atoi(q.Get("page")); err == nil && p > 1 {
+		page = p
+	}
+	if page > maxUIPages {
+		page = maxUIPages
+	}
+
 	f := store.QueryFilter{
 		Since: since, Until: until, User: user, Catalog: catalog, State: state,
-		Sort: store.SortKey(sort), Desc: dir == "desc", Limit: uiLimit,
+		Sort: store.SortKey(sort), Desc: dir == "desc", Limit: uiLimit + 1,
+		Offset: (page - 1) * uiLimit,
 	}
 	v := &listView{
 		Ranges: ranges, States: statesList,
 		Range: rng, RangeLabel: label, User: user, Catalog: catalog, State: state,
-		Sort: sort, Dir: dir, FailedOnly: state == "FAILED",
+		Sort: sort, Dir: dir, FailedOnly: state == "FAILED", Page: page,
 	}
 	return v, f
 }
@@ -118,9 +133,13 @@ func (s *Server) populateRows(ctx context.Context, v *listView, f store.QueryFil
 		s.log.Error("list queries failed", "error", err)
 		return
 	}
+	v.HasPrev = v.Page > 1
+	if len(rows) > uiLimit {
+		rows = rows[:uiLimit]
+		v.HasNext = v.Page < maxUIPages
+	}
 	v.Rows = rows
 	v.Count = len(rows)
-	v.Truncated = len(rows) >= uiLimit
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -211,5 +230,24 @@ func failedValues(v *listView) url.Values {
 	}
 	q.Set("sort", v.Sort)
 	q.Set("dir", v.Dir)
+	return q
+}
+
+func prevHref(v *listView) string { return "/?" + pageValues(v, v.Page-1).Encode() }
+func prevHrefPartial(v *listView) string {
+	return "/partials/queries?" + pageValues(v, v.Page-1).Encode()
+}
+func nextHref(v *listView) string { return "/?" + pageValues(v, v.Page+1).Encode() }
+func nextHrefPartial(v *listView) string {
+	return "/partials/queries?" + pageValues(v, v.Page+1).Encode()
+}
+
+func pageValues(v *listView, page int) url.Values {
+	q := v.baseValues()
+	q.Set("sort", v.Sort)
+	q.Set("dir", v.Dir)
+	if page > 1 {
+		q.Set("page", strconv.Itoa(page))
+	}
 	return q
 }

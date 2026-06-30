@@ -52,6 +52,18 @@ func TestSchemaDDLWithoutLocation(t *testing.T) {
 	}
 }
 
+func TestQueryIDDay(t *testing.T) {
+	d, ok := queryIDDay("20260630_143418_00512_abcde")
+	if !ok || d.Format("2006-01-02") != "2026-06-30" {
+		t.Errorf("queryIDDay parsed wrong: %v ok=%v", d, ok)
+	}
+	for _, bad := range []string{"", "short", "notadate_1234", "2026ab30_x"} {
+		if _, ok := queryIDDay(bad); ok {
+			t.Errorf("queryIDDay(%q) should fail", bad)
+		}
+	}
+}
+
 func TestQuoteIdentEscaping(t *testing.T) {
 	if got := quoteIdent(`a"b`); got != `"a""b"` {
 		t.Errorf("quoteIdent escaping wrong: %s", got)

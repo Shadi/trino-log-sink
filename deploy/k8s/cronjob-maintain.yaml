@@ -1,7 +1,6 @@
-# Iceberg table maintenance: compaction + snapshot/orphan cleanup. Writing the
-# query log through Trino produces many small files and one snapshot per flush;
-# without this the table accumulates small files and the prune DELETEs never
-# reclaim object-store space. Schedule off-peak and after the prune job.
+# Nightly Iceberg cleanup: expire old snapshots + remove orphan files so the
+# prune DELETEs actually reclaim object-store space. File compaction is handled
+# more frequently by the optimize CronJob. Schedule off-peak, after prune.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -34,7 +33,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: maintain
-              image: ghcr.io/shadi/trino-query-log-sink:latest
+              image: ghcr.io/shadi/trino-log-sink:latest
               args: ["maintain"]
               envFrom:
                 - configMapRef:

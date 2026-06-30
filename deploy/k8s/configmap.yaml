@@ -22,14 +22,15 @@ data:
   # Iceberg warehouse location used by the `init` subcommand / DDL. Replace the
   # bucket, or leave empty if the catalog already has a warehouse configured.
   ICEBERG_LOCATION: ""
-  # Batching. FLUSH_INTERVAL is the max lag before a partial batch is written;
-  # 30s keeps Iceberg commit/file counts low for a human-facing browse UI.
-  BATCH_SIZE: "100"
-  FLUSH_INTERVAL: "30s"
-  BUFFER_CAPACITY: "10000"
+  # Batching. Larger BATCH_SIZE + longer FLUSH_INTERVAL = fewer, bigger Iceberg
+  # files (the flush writes one file). FLUSH_INTERVAL is also the max UI lag.
+  BATCH_SIZE: "2000"
+  FLUSH_INTERVAL: "10m"
+  BUFFER_CAPACITY: "5000"
   FLUSH_MAX_RETRIES: "3"
-  # Retention (prune CronJob) and Iceberg maintenance (maintain CronJob).
+  # Retention (prune), compaction window (optimize), snapshot/orphan TTL (maintain).
   RETENTION_DAYS: "7"
+  OPTIMIZE_DAYS: "1"
   MAINTAIN_RETENTION: "7d"
   # Observability.
   METRICS_ENABLED: "true"

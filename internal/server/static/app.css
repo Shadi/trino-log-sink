@@ -103,6 +103,7 @@ td.q { white-space: nowrap; max-width: 460px; overflow: hidden; text-overflow: e
 .badge.other { background: rgba(210,153,34,0.15); color: var(--warn); }
 
 .empty { padding: 2rem; text-align: center; color: var(--muted); }
+.pager { margin: 0.8rem 0; text-align: center; }
 .error { padding: 1rem; background: rgba(248,81,73,0.1); border: 1px solid var(--fail); border-radius: 8px; color: #ffb4b0; margin-bottom: 1rem; }
 
 /* detail page */

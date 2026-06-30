@@ -26,7 +26,7 @@ spec:
       containers:
         - name: sink
           # Replace with your published image.
-          image: ghcr.io/shadi/trino-query-log-sink:latest
+          image: ghcr.io/shadi/trino-log-sink:latest
           args: ["serve"]
           ports:
             - name: http
