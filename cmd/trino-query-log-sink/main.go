@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Shadi/trino-query-log-sink/internal/cache"
 	"github.com/Shadi/trino-query-log-sink/internal/config"
 	"github.com/Shadi/trino-query-log-sink/internal/ingest"
 	"github.com/Shadi/trino-query-log-sink/internal/observability"
@@ -134,7 +135,24 @@ func runServer(cfg *config.Config, log *slog.Logger, opts server.Options) error 
 		})
 	}
 
-	srv := server.New(*cfg, st, buf, metrics, log, opts)
+	reader := store.Store(st)
+	if opts.UI && cfg.Cache.Enabled() {
+		c := cache.NewRedis(cfg.Cache)
+		defer c.Close()
+		pctx, pcancel := context.WithTimeout(context.Background(), cfg.Cache.Timeout)
+		perr := c.Ping(pctx)
+		pcancel()
+		if perr != nil {
+			log.Warn("cache backend not reachable at startup; serving fail-open",
+				"addr", cfg.Cache.Addr, "error", perr)
+		} else {
+			log.Info("cache enabled",
+				"addr", cfg.Cache.Addr, "list_ttl", cfg.Cache.ListTTL, "query_ttl", cfg.Cache.QueryTTL)
+		}
+		reader = store.NewCached(st, c, cfg.Cache, metrics, log)
+	}
+
+	srv := server.New(*cfg, reader, buf, metrics, log, opts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

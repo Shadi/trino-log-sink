@@ -24,10 +24,23 @@ type Trino struct {
 	QueryTimeout time.Duration
 }
 
+type Cache struct {
+	Addr     string
+	Password string
+	DB       int
+	TLS      bool
+	ListTTL  time.Duration
+	QueryTTL time.Duration
+	Timeout  time.Duration
+}
+
+func (c Cache) Enabled() bool { return c.Addr != "" }
+
 type Config struct {
 	ListenAddr string
 
 	Trino Trino
+	Cache Cache
 
 	BatchSize       int
 	FlushInterval   time.Duration
@@ -62,6 +75,15 @@ func Load() (*Config, error) {
 			AccessToken:  e.str("TRINO_ACCESS_TOKEN", ""),
 			SSL:          e.boolVal("TRINO_SSL", false),
 			QueryTimeout: e.duration("TRINO_QUERY_TIMEOUT", 60*time.Second),
+		},
+		Cache: Cache{
+			Addr:     e.str("REDIS_ADDR", ""),
+			Password: e.str("REDIS_PASSWORD", ""),
+			DB:       e.intVal("REDIS_DB", 0),
+			TLS:      e.boolVal("REDIS_TLS", false),
+			ListTTL:  e.duration("CACHE_LIST_TTL", 10*time.Minute),
+			QueryTTL: e.duration("CACHE_QUERY_TTL", time.Hour),
+			Timeout:  e.duration("CACHE_TIMEOUT", 250*time.Millisecond),
 		},
 		BatchSize:         e.intVal("BATCH_SIZE", 100),
 		FlushInterval:     e.duration("FLUSH_INTERVAL", 5*time.Second),
@@ -102,6 +124,13 @@ func (c *Config) validate() []error {
 	add(c.FlushMaxRetries < 0, "FLUSH_MAX_RETRIES must be >= 0")
 	add(c.RetentionDays < 0, "RETENTION_DAYS must be >= 0")
 	add(c.OptimizeDays < 0, "OPTIMIZE_DAYS must be >= 0")
+
+	if c.Cache.Enabled() {
+		add(c.Cache.DB < 0, "REDIS_DB must be >= 0")
+		add(c.Cache.ListTTL <= 0, "CACHE_LIST_TTL must be > 0 when REDIS_ADDR is set")
+		add(c.Cache.QueryTTL <= 0, "CACHE_QUERY_TTL must be > 0 when REDIS_ADDR is set")
+		add(c.Cache.Timeout <= 0, "CACHE_TIMEOUT must be > 0 when REDIS_ADDR is set")
+	}
 
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":

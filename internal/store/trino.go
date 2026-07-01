@@ -231,12 +231,13 @@ func (s *TrinoStore) ListQueries(ctx context.Context, f QueryFilter) ([]QuerySum
 }
 
 func (s *TrinoStore) GetQuery(ctx context.Context, queryID string) (*Row, error) {
-	where := quoteIdent("query_id") + " = ?"
-	args := []any{queryID}
-	if day, ok := queryIDDay(queryID); ok {
-		where += " AND " + quoteIdent("create_time") + " >= ? AND " + quoteIdent("create_time") + " < ?"
-		args = append(args, day.AddDate(0, 0, -1), day.AddDate(0, 0, 2))
+	day, ok := queryIDDay(queryID)
+	if !ok {
+		return nil, nil
 	}
+	where := quoteIdent("query_id") + " = ? AND " +
+		quoteIdent("create_time") + " >= ? AND " + quoteIdent("create_time") + " < ?"
+	args := []any{queryID, day.AddDate(0, 0, -1), day.AddDate(0, 0, 2)}
 
 	stmt := "SELECT " + s.rowSelectList + " FROM " + s.table + " WHERE " + where + " LIMIT 1"
 	rows, err := s.db.QueryContext(ctx, stmt, args...)

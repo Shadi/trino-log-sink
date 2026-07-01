@@ -23,6 +23,10 @@ type Metrics struct {
 	rowsFlushed      atomic.Int64
 	flushFailures    atomic.Int64
 
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
+	cacheErrors atomic.Int64
+
 	bufferSource atomic.Pointer[func() BufferStats]
 }
 
@@ -38,6 +42,10 @@ func (m *Metrics) Enqueued()     { m.rowsEnqueued.Add(1) }
 func (m *Metrics) Dropped()      { m.eventsDropped.Add(1) }
 func (m *Metrics) Flushed(n int) { m.batchesFlushed.Add(1); m.rowsFlushed.Add(int64(n)) }
 func (m *Metrics) FlushFailed()  { m.flushFailures.Add(1) }
+
+func (m *Metrics) CacheHit()   { m.cacheHits.Add(1) }
+func (m *Metrics) CacheMiss()  { m.cacheMisses.Add(1) }
+func (m *Metrics) CacheError() { m.cacheErrors.Add(1) }
 
 const metricPrefix = "trino_query_log_"
 
@@ -56,6 +64,9 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		{"batches_flushed_total", "Batches successfully written to Trino.", m.batchesFlushed.Load()},
 		{"rows_flushed_total", "Rows successfully written to Trino.", m.rowsFlushed.Load()},
 		{"flush_failures_total", "Batches dropped after exhausting flush retries.", m.flushFailures.Load()},
+		{"cache_hits_total", "Read-through cache hits.", m.cacheHits.Load()},
+		{"cache_misses_total", "Read-through cache misses.", m.cacheMisses.Load()},
+		{"cache_errors_total", "Read-through cache backend or decode errors.", m.cacheErrors.Load()},
 	}
 	for _, c := range counters {
 		fmt.Fprintf(w, "# HELP %s%s %s\n", metricPrefix, c.name, c.help)

@@ -81,6 +81,13 @@ in `serve`/`ui`.
 | `TRINO_ACCESS_TOKEN` | *(empty)* | Optional [bearer/JWT token](https://trino.io/docs/current/security/jwt.html). |
 | `TRINO_SSL` | `false` | Use [HTTPS/TLS](https://trino.io/docs/current/security/tls.html) to the coordinator. |
 | `TRINO_QUERY_TIMEOUT` | `60s` | Per-query timeout; also bounds each flush. |
+| `REDIS_ADDR` | *(empty)* | Optional read-through cache backend (`host:6379`). **Empty disables the cache** and the service reads Trino directly. |
+| `REDIS_PASSWORD` | *(empty)* | Cache password / Memorystore AUTH string. |
+| `REDIS_DB` | `0` | Cache logical database. |
+| `REDIS_TLS` | `false` | Connect to the cache over TLS (e.g. Memorystore in-transit encryption). |
+| `CACHE_LIST_TTL` | `10m` | Dashboard/list result TTL. |
+| `CACHE_QUERY_TTL` | `1h` | Per-query detail TTL (completed queries are immutable). |
+| `CACHE_TIMEOUT` | `250ms` | Per-operation cache deadline; bounds added latency when the cache is slow/down. |
 
 ## Quick start (local, against a port-forwarded Trino)
 
