@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	cacheSchemaVersion = 1
+	cacheSchemaVersion = 2
 	cacheKeyPrefix     = "qls"
 )
 

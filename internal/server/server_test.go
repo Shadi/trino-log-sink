@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,16 +17,21 @@ import (
 )
 
 type fakeStore struct {
-	list   []store.QuerySummary
-	detail *store.Row
+	list    []store.QuerySummary
+	detail  *store.Row
+	listErr error
+	getErr  error
 }
 
 func (f *fakeStore) Validate(context.Context) error                 { return nil }
 func (f *fakeStore) InsertBatch(context.Context, []store.Row) error { return nil }
 func (f *fakeStore) ListQueries(context.Context, store.QueryFilter) ([]store.QuerySummary, error) {
-	return f.list, nil
+	return f.list, f.listErr
 }
 func (f *fakeStore) GetQuery(_ context.Context, id string) (*store.Row, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if f.detail != nil && f.detail.QueryID == id {
 		return f.detail, nil
 	}
@@ -254,7 +261,7 @@ func TestIngestRoleExcludesUI(t *testing.T) {
 	if rec := postIngest(t, s, validEvent); rec.Code != http.StatusAccepted {
 		t.Fatalf("ingest role should accept /ingest, got %d", rec.Code)
 	}
-	for _, path := range []string{"/", "/query/x", "/partials/queries", "/static/app.css"} {
+	for _, path := range []string{"/", "/query/x", "/partials/queries", "/static/app.css", "/api/v1/queries", "/api/v1/queries/x"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
@@ -294,5 +301,141 @@ func TestStaticServedButNoDirListing(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("directory listing should be 404, got %d", rec.Code)
+	}
+}
+
+func TestAPIListQueries(t *testing.T) {
+	st := &fakeStore{list: []store.QuerySummary{
+		{QueryID: "q-1", CreateTime: time.Now().UTC(), UserName: "alice", QueryState: "FINISHED", CPUMS: 1000},
+		{QueryID: "q-2", CreateTime: time.Now().UTC(), UserName: "bob", QueryState: "FAILED"},
+	}}
+	s := newTestServer(st, &fakeEnqueuer{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queries?range=24h&sort=cpu", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("content-type = %q, want application/json", ct)
+	}
+	var got listResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Count != 2 || len(got.Queries) != 2 {
+		t.Errorf("count = %d, queries = %d, want 2/2", got.Count, len(got.Queries))
+	}
+	if got.HasNext {
+		t.Errorf("hasNext = true, want false")
+	}
+	if got.Queries[0].QueryID != "q-1" {
+		t.Errorf("first queryId = %q, want q-1", got.Queries[0].QueryID)
+	}
+	if !strings.Contains(rec.Body.String(), `"queryId"`) {
+		t.Errorf("expected camelCase queryId field in body")
+	}
+}
+
+func TestAPIListQueriesPaging(t *testing.T) {
+	st := &fakeStore{list: []store.QuerySummary{
+		{QueryID: "q-1", CreateTime: time.Now().UTC()},
+		{QueryID: "q-2", CreateTime: time.Now().UTC()},
+	}}
+	s := newTestServer(st, &fakeEnqueuer{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queries?limit=1", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	var got listResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Queries) != 1 || !got.HasNext {
+		t.Errorf("len = %d, hasNext = %v, want 1/true", len(got.Queries), got.HasNext)
+	}
+	if got.Limit != 1 {
+		t.Errorf("limit = %d, want 1", got.Limit)
+	}
+}
+
+func TestAPIListQueriesError(t *testing.T) {
+	st := &fakeStore{listErr: errors.New("boom")}
+	s := newTestServer(st, &fakeEnqueuer{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queries", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	var got apiError
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Error == "" {
+		t.Errorf("expected json error body, got %q (err %v)", rec.Body.String(), err)
+	}
+}
+
+func TestAPIGetQuery(t *testing.T) {
+	st := &fakeStore{detail: &store.Row{
+		QueryID: "q-detail", QueryState: "FINISHED", UserName: "dan", QueryText: "SELECT * FROM t",
+		CreateTime: time.Now().UTC(), WallMS: 5000, CPUMS: 2500,
+		InputsJSON: `[{"catalogName":"c","schema":"s","table":"t","physicalInputBytes":1048576}]`,
+		Plan:       "- Output[1]",
+	}}
+	s := newTestServer(st, &fakeEnqueuer{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queries/q-detail", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got queryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Row == nil || got.QueryID != "q-detail" {
+		t.Fatalf("queryId not decoded: %+v", got.Row)
+	}
+	if got.Plan != "- Output[1]" {
+		t.Errorf("plan = %q", got.Plan)
+	}
+	if len(got.Inputs) != 1 || got.Inputs[0].CatalogName != "c" {
+		t.Errorf("inputs not parsed: %+v", got.Inputs)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"queryId"`, `"plan"`, `"inputs"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestAPIGetQueryNotFound(t *testing.T) {
+	s := newTestServer(&fakeStore{}, &fakeEnqueuer{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queries/missing", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("content-type = %q, want application/json", ct)
+	}
+}
+
+func TestAPIGetQueryError(t *testing.T) {
+	st := &fakeStore{getErr: errors.New("boom")}
+	s := newTestServer(st, &fakeEnqueuer{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queries/q-x", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }

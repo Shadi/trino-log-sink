@@ -82,28 +82,37 @@ type detailView struct {
 	Inputs []event.InputMetadata
 }
 
-func (s *Server) buildListView(q url.Values) (*listView, store.QueryFilter) {
+func resolveRange(q url.Values) (string, time.Duration, string) {
 	rng := q.Get("range")
 	dur, label, ok := rangeInfo(rng)
 	if !ok {
 		rng = "24h"
 		dur, label, _ = rangeInfo(rng)
 	}
-	until := time.Now().UTC()
-	since := until.Add(-dur)
+	return rng, dur, label
+}
 
-	user := strings.TrimSpace(q.Get("user"))
-	catalog := strings.TrimSpace(q.Get("catalog"))
-	state := q.Get("state")
-
+func buildQueryFilter(q url.Values) store.QueryFilter {
+	_, dur, _ := resolveRange(q)
 	sort := q.Get("sort")
 	if !validSorts[sort] {
 		sort = "start"
 	}
-	dir := "desc"
-	if q.Get("dir") == "asc" {
-		dir = "asc"
+	until := time.Now().UTC()
+	return store.QueryFilter{
+		Since:   until.Add(-dur),
+		Until:   until,
+		User:    strings.TrimSpace(q.Get("user")),
+		Catalog: strings.TrimSpace(q.Get("catalog")),
+		State:   q.Get("state"),
+		Sort:    store.SortKey(sort),
+		Desc:    q.Get("dir") != "asc",
 	}
+}
+
+func (s *Server) buildListView(q url.Values) (*listView, store.QueryFilter) {
+	rng, _, label := resolveRange(q)
+	f := buildQueryFilter(q)
 
 	page := 1
 	if p, err := strconv.Atoi(q.Get("page")); err == nil && p > 1 {
@@ -112,32 +121,43 @@ func (s *Server) buildListView(q url.Values) (*listView, store.QueryFilter) {
 	if page > maxUIPages {
 		page = maxUIPages
 	}
+	f.Limit = uiLimit + 1
+	f.Offset = (page - 1) * uiLimit
 
-	f := store.QueryFilter{
-		Since: since, Until: until, User: user, Catalog: catalog, State: state,
-		Sort: store.SortKey(sort), Desc: dir == "desc", Limit: uiLimit + 1,
-		Offset: (page - 1) * uiLimit,
+	dir := "asc"
+	if f.Desc {
+		dir = "desc"
 	}
 	v := &listView{
 		Ranges: ranges, States: statesList,
-		Range: rng, RangeLabel: label, User: user, Catalog: catalog, State: state,
-		Sort: sort, Dir: dir, FailedOnly: state == "FAILED", Page: page,
+		Range: rng, RangeLabel: label, User: f.User, Catalog: f.Catalog, State: f.State,
+		Sort: string(f.Sort), Dir: dir, FailedOnly: f.State == "FAILED", Page: page,
 	}
 	return v, f
 }
 
-func (s *Server) populateRows(ctx context.Context, v *listView, f store.QueryFilter) {
+func (s *Server) listAndTrim(ctx context.Context, f store.QueryFilter, pageSize int) ([]store.QuerySummary, bool, error) {
 	rows, err := s.store.ListQueries(ctx, f)
+	if err != nil {
+		return nil, false, err
+	}
+	hasNext := false
+	if len(rows) > pageSize {
+		rows = rows[:pageSize]
+		hasNext = true
+	}
+	return rows, hasNext, nil
+}
+
+func (s *Server) populateRows(ctx context.Context, v *listView, f store.QueryFilter) {
+	rows, hasNext, err := s.listAndTrim(ctx, f, uiLimit)
 	if err != nil {
 		v.Error = "query failed: " + err.Error()
 		s.log.Error("list queries failed", "error", err)
 		return
 	}
 	v.HasPrev = v.Page > 1
-	if len(rows) > uiLimit {
-		rows = rows[:uiLimit]
-		v.HasNext = v.Page < maxUIPages
-	}
+	v.HasNext = hasNext && v.Page < maxUIPages
 	v.Rows = rows
 	v.Count = len(rows)
 }

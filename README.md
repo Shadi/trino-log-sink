@@ -53,6 +53,12 @@ in `serve`/`ui`.
   shortcuts, and a failed-only toggle.
 - `GET /query/{queryId}` — full SQL, statistics, plan(s), per-table input bytes,
   and failure details.
+- `GET /api/v1/queries` — JSON list of query summaries for programmatic use (CLI, etc.);
+  same filters as the dashboard (`range`, `user`, `catalog`, `state`, `sort`, `dir`) plus
+  `limit` (default 100, max 500) and `offset`. Returns
+  `{ "queries": [...], "count", "limit", "offset", "hasNext" }`.
+- `GET /api/v1/queries/{queryId}` — JSON detail for one query (all statistics, `plan`,
+  `jsonPlan`, and parsed `inputs`); `404` if the id is unknown.
 - `GET /healthz` — liveness. `GET /readyz` — ready only when the table is
   reachable. `GET /metrics` — Prometheus counters (if enabled).
 

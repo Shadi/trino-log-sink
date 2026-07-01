@@ -105,6 +105,9 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /partials/queries", s.handleQueriesPartial)
 		mux.HandleFunc("GET /query/{queryId}", s.handleQueryDetail)
 
+		mux.HandleFunc("GET /api/v1/queries", s.handleAPIListQueries)
+		mux.HandleFunc("GET /api/v1/queries/{queryId}", s.handleAPIGetQuery)
+
 		staticFS, _ := fs.Sub(assets, "static")
 		fileServer := http.StripPrefix("/static/", http.FileServer(http.FS(staticFS)))
 		mux.Handle("GET /static/", noDirListing(fileServer))

@@ -77,46 +77,46 @@ var schemaColumns = []column{
 }
 
 type Row struct {
-	QueryID              string
-	QueryState           string
-	QueryType            string
-	UserName             string
-	Source               string
-	Principal            string
-	ClientTags           string
-	Catalog              string
-	SchemaName           string
-	QueryText            string
-	UpdateType           string
-	CreateTime           time.Time
-	ExecutionStartTime   *time.Time
-	EndTime              *time.Time
-	QueuedMS             int64
-	AnalysisMS           int64
-	PlanningMS           int64
-	ExecutionMS          int64
-	WallMS               int64
-	CPUMS                int64
-	PeakUserMemoryBytes  int64
-	PeakTotalMemoryBytes int64
-	PhysicalInputBytes   int64
-	PhysicalInputRows    int64
-	ProcessedInputBytes  int64
-	ProcessedInputRows   int64
-	OutputBytes          int64
-	OutputRows           int64
-	WrittenBytes         int64
-	WrittenRows          int64
-	CompletedSplits      int64
-	ErrorCode            string
-	ErrorType            string
-	ErrorMessage         string
-	Plan                 string
-	JSONPlan             string
-	InputsJSON           string
-	ResourceGroup        string
-	ServerVersion        string
-	Environment          string
+	QueryID              string     `json:"queryId"`
+	QueryState           string     `json:"queryState"`
+	QueryType            string     `json:"queryType"`
+	UserName             string     `json:"userName"`
+	Source               string     `json:"source"`
+	Principal            string     `json:"principal"`
+	ClientTags           string     `json:"clientTags"`
+	Catalog              string     `json:"catalog"`
+	SchemaName           string     `json:"schemaName"`
+	QueryText            string     `json:"queryText"`
+	UpdateType           string     `json:"updateType"`
+	CreateTime           time.Time  `json:"createTime"`
+	ExecutionStartTime   *time.Time `json:"executionStartTime"`
+	EndTime              *time.Time `json:"endTime"`
+	QueuedMS             int64      `json:"queuedMs"`
+	AnalysisMS           int64      `json:"analysisMs"`
+	PlanningMS           int64      `json:"planningMs"`
+	ExecutionMS          int64      `json:"executionMs"`
+	WallMS               int64      `json:"wallMs"`
+	CPUMS                int64      `json:"cpuMs"`
+	PeakUserMemoryBytes  int64      `json:"peakUserMemoryBytes"`
+	PeakTotalMemoryBytes int64      `json:"peakTotalMemoryBytes"`
+	PhysicalInputBytes   int64      `json:"physicalInputBytes"`
+	PhysicalInputRows    int64      `json:"physicalInputRows"`
+	ProcessedInputBytes  int64      `json:"processedInputBytes"`
+	ProcessedInputRows   int64      `json:"processedInputRows"`
+	OutputBytes          int64      `json:"outputBytes"`
+	OutputRows           int64      `json:"outputRows"`
+	WrittenBytes         int64      `json:"writtenBytes"`
+	WrittenRows          int64      `json:"writtenRows"`
+	CompletedSplits      int64      `json:"completedSplits"`
+	ErrorCode            string     `json:"errorCode"`
+	ErrorType            string     `json:"errorType"`
+	ErrorMessage         string     `json:"errorMessage"`
+	Plan                 string     `json:"plan"`
+	JSONPlan             string     `json:"jsonPlan"`
+	InputsJSON           string     `json:"inputsJson"`
+	ResourceGroup        string     `json:"resourceGroup"`
+	ServerVersion        string     `json:"serverVersion"`
+	Environment          string     `json:"environment"`
 }
 
 func (r Row) args() []any {
@@ -132,22 +132,22 @@ func (r Row) args() []any {
 }
 
 type QuerySummary struct {
-	QueryID             string
-	CreateTime          time.Time
-	ExecutionStartTime  *time.Time
-	UserName            string
-	Source              string
-	Catalog             string
-	QueryState          string
-	QueryType           string
-	QueryPreview        string
-	WallMS              int64
-	CPUMS               int64
-	PhysicalInputBytes  int64
-	PeakUserMemoryBytes int64
-	OutputRows          int64
-	ProcessedInputRows  int64
-	ErrorCode           string
+	QueryID             string     `json:"queryId"`
+	CreateTime          time.Time  `json:"createTime"`
+	ExecutionStartTime  *time.Time `json:"executionStartTime"`
+	UserName            string     `json:"userName"`
+	Source              string     `json:"source"`
+	Catalog             string     `json:"catalog"`
+	QueryState          string     `json:"queryState"`
+	QueryType           string     `json:"queryType"`
+	QueryPreview        string     `json:"queryPreview"`
+	WallMS              int64      `json:"wallMs"`
+	CPUMS               int64      `json:"cpuMs"`
+	PhysicalInputBytes  int64      `json:"physicalInputBytes"`
+	PeakUserMemoryBytes int64      `json:"peakUserMemoryBytes"`
+	OutputRows          int64      `json:"outputRows"`
+	ProcessedInputRows  int64      `json:"processedInputRows"`
+	ErrorCode           string     `json:"errorCode"`
 }
 
 type SortKey string
