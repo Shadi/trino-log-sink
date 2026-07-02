@@ -11,12 +11,6 @@ in [iceberg](https://trino.io/docs/current/connector/iceberg.html) format, and p
 The app can run in 2 modes, first as a single app for both events consumption and UI using the `serve` command,
 or in two separate apps one for ingestion use `ingest` command and one for ui using `ui` command.
 
-```
-Trino coordinator ──(HTTP event listener, POST JSON)──▶ ingest /ingest
-   buffer (batched) ──INSERT via Trino──▶ Iceberg <catalog>.<schema>.<table>
-   ui ──SELECT via Trino──▶ browse + per-query detail
-```
-
 ## Subcommands
 
 The single binary has several modes (configuration always comes from the environment):
@@ -133,6 +127,50 @@ The Service is named **`trino-query-log-sink`**; point Trino's
 [event listener](https://trino.io/docs/current/admin/event-listeners-http.html) at
 `http://trino-query-log-sink.trino:8080/ingest`. Browse the UI with
 `kubectl -n trino port-forward svc/trino-query-log-sink 8080:8080`.
+
+## Query CLI
+
+The same binary has a `query` client that reads the JSON API of a **running**
+instance and prints terminal-friendly output (it never dumps full query plans into your terminal/context unless asked).
+It only talks to the API — no direct Trino connection — so it needs no
+Trino/env config.
+
+```bash
+# list — recent queries, sorted (start|wall|cpu|bytes|mem|rows)
+trino-query-log-sink query list --url http://localhost:8080 --sort cpu --limit 5
+
+# get — one query's stats + input tables (no plan body)
+trino-query-log-sink query get <queryId> --url http://localhost:8080
+
+# plan — top CPU operators, parsed from the text plan; --raw for the full plan
+trino-query-log-sink query plan <queryId> --url http://localhost:8080 --top 10
+```
+
+From the image (the client ships in the same binary):
+
+```bash
+docker run --rm ghcr.io/shadi/trino-query-log-sink:TAG \
+  query list --url http://trino-query-log-sink.trino:8080
+```
+
+Common flags (all subcommands): `--url` (required), `-H/--header "Key: Value"`
+(repeatable), `--token-file PATH` (sent as `Authorization: Bearer <token>`, or use
+`--token-header NAME` to send the raw token in a custom header), `--timeout`,
+`--insecure`, and `-o/--output table|json`. `list` also takes `--range`, `--user`,
+`--catalog`, `--state`, `--sort`, `--desc`, `--limit`, `--offset`. Exit codes:
+`0` ok, `1` error, `4` query not found.
+
+### For AI agent
+
+Every command's output is small and bounded by design, so it won't flood the
+context window:
+
+- Start with `query list --sort cpu --limit 10` to find the expensive query id.
+- `query get <id>` for stats + input tables — it **omits** the query plan.
+- `query plan <id>` for the top CPU operators (a few lines), not the whole plan.
+- Avoid `--raw` (dumps the full multi-KB plan) unless you truly need it.
+- `-o json` stays concise too — the `get` JSON omits the `plan`/`jsonPlan` bodies.
+- Branch on exit codes (`0`/`1`/`4`) instead of parsing prose; errors go to stderr.
 
 ## Development
 

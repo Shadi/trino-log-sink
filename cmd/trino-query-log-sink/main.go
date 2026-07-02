@@ -29,11 +29,15 @@ import (
 	"github.com/Shadi/trino-query-log-sink/internal/ingest"
 	"github.com/Shadi/trino-query-log-sink/internal/observability"
 	"github.com/Shadi/trino-query-log-sink/internal/prune"
+	"github.com/Shadi/trino-query-log-sink/internal/querycli"
 	"github.com/Shadi/trino-query-log-sink/internal/server"
 	"github.com/Shadi/trino-query-log-sink/internal/store"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "query" {
+		os.Exit(querycli.Main(os.Args[2:], os.Stdout))
+	}
 	if err := run(); err != nil {
 		slog.Error("fatal", "error", err)
 		os.Exit(1)
@@ -91,8 +95,10 @@ func usage() {
   optimize  compact recent partitions' files
   maintain  expire snapshots + remove orphan files
   ddl       print the DDL to stdout
+  query     query a running instance's JSON API (list/get/plan)
 
 Configuration is read from environment variables (see README).
+Run 'query -h' for the client subcommands (they take --url, not env config).
 `)
 }
 
