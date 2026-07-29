@@ -13,7 +13,9 @@ import (
 type Store interface {
 	// Validate confirms the configured catalog/schema/table are reachable.
 	Validate(ctx context.Context) error
-	// InsertBatch writes rows in a single multi-row INSERT.
+	// InsertBatch writes rows using one or more multi-row INSERTs, splitting
+	// so each statement stays under the configured statement-size budget.
+	// Chunks are not atomic: a failure can leave earlier chunks committed.
 	InsertBatch(ctx context.Context, rows []Row) error
 	// ListQueries returns lightweight summaries matching the filter.
 	ListQueries(ctx context.Context, f QueryFilter) ([]QuerySummary, error)

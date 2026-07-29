@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/config"
+	"github.com/Shadi/trino-log-sink/internal/config"
 	"github.com/trinodb/trino-go-client/trino"
 )
 
@@ -25,9 +25,12 @@ type TrinoStore struct {
 
 	table          string
 	insertColumns  string
+	insertPrefix   string
 	rowPlaceholder string
 	rowSelectList  string
 	summarySelect  string
+	stmtOverhead   int
+	maxStmtBytes   int
 }
 
 var summaryColumns = []string{
@@ -77,9 +80,13 @@ func New(cfg config.Trino) (*TrinoStore, error) {
 	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	s := &TrinoStore{
-		db:    db,
-		cfg:   cfg,
-		table: qualifiedName(cfg.Catalog, cfg.Schema, cfg.Table),
+		db:           db,
+		cfg:          cfg,
+		table:        qualifiedName(cfg.Catalog, cfg.Schema, cfg.Table),
+		maxStmtBytes: cfg.MaxStatementBytes,
+	}
+	if s.maxStmtBytes <= 0 {
+		s.maxStmtBytes = defaultMaxStatementBytes
 	}
 	s.buildStatements()
 	return s, nil
@@ -98,6 +105,8 @@ func (s *TrinoStore) buildStatements() {
 	s.insertColumns = strings.Join(quoted, ", ")
 	s.rowSelectList = strings.Join(rowParts, ", ")
 	s.rowPlaceholder = "(" + strings.TrimSuffix(strings.Repeat("?,", len(schemaColumns)), ",") + ")"
+	s.insertPrefix = "INSERT INTO " + s.table + " (" + s.insertColumns + ") VALUES "
+	s.stmtOverhead = executeImmediateOverhead + len(s.insertPrefix) + strings.Count(s.insertPrefix, "'")
 
 	summary := make([]string, len(summaryColumns))
 	for i, name := range summaryColumns {
@@ -130,23 +139,146 @@ func (s *TrinoStore) Validate(ctx context.Context) error {
 	return rows.Close()
 }
 
+// The driver runs with DisableExplicitPrepare, so every statement ships as
+// EXECUTE IMMEDIATE '<insert text>' USING <args serialized to SQL literals> —
+// one string whose size must stay under the cluster's query.max-length. The
+// constants below upper-bound the serialized size of each arg (including its
+// " USING "-list separator) so batches can be split before the server rejects
+// them.
+const (
+	defaultMaxStatementBytes = 700_000
+	minStatementBudget       = 4096
+	clampMaxIterations       = 1000
+
+	executeImmediateOverhead = 27 // "EXECUTE IMMEDIATE '" + closing "'" + " USING "
+	stringArgOverhead        = 4  // two quotes + ", " separator
+	nullArgBytes             = 6  // "NULL" + separator
+	numericArgBytes          = 24 // int64 decimal (<= 20 chars) + separator
+	timestampArgBytes        = 64 // "TIMESTAMP '...'" (<= 50 bytes) + separator
+)
+
+// ErrNonRetryable marks insert failures that are deterministic — replaying the
+// same statement can never succeed, so callers should drop the batch instead
+// of burning retries.
+var ErrNonRetryable = errors.New("non-retryable")
+
 func (s *TrinoStore) InsertBatch(ctx context.Context, rows []Row) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	colCount := len(schemaColumns)
+	budget := max(s.maxStmtBytes-s.stmtOverhead, minStatementBudget)
+	clamped := make([]Row, len(rows))
+	for i, r := range rows {
+		clamped[i] = s.clampRow(r, budget)
+	}
+	for _, chunk := range chunkRows(clamped, budget, s.estimateRowBytes) {
+		if err := s.insertChunk(ctx, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *TrinoStore) insertChunk(ctx context.Context, rows []Row) error {
 	groups := make([]string, len(rows))
-	args := make([]any, 0, len(rows)*colCount)
+	args := make([]any, 0, len(rows)*len(schemaColumns))
 	for i, r := range rows {
 		groups[i] = s.rowPlaceholder
 		args = append(args, r.args()...)
 	}
 
-	stmt := "INSERT INTO " + s.table + " (" + s.insertColumns + ") VALUES " + strings.Join(groups, ", ")
-	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
-		return fmt.Errorf("insert %d rows: %w", len(rows), err)
+	if _, err := s.db.ExecContext(ctx, s.insertPrefix+strings.Join(groups, ", "), args...); err != nil {
+		return fmt.Errorf("insert %d rows: %w", len(rows), classifyInsertErr(err))
 	}
 	return nil
+}
+
+// classifyInsertErr wraps Trino's query-text-too-large rejection with
+// ErrNonRetryable. The string fallback covers HTTP-level rejections whose
+// error chain carries no *trino.ErrTrino.
+func classifyInsertErr(err error) error {
+	var te *trino.ErrTrino
+	if (errors.As(err, &te) && te.ErrorName == "QUERY_TEXT_TOO_LARGE") ||
+		strings.Contains(err.Error(), "exceeds the maximum length") {
+		return fmt.Errorf("%w: %w", ErrNonRetryable, err)
+	}
+	return err
+}
+
+// estimateArgBytes upper-bounds the bytes the driver's Serial adds to the
+// statement for one arg. Strings gain one byte per embedded single quote
+// (quote doubling).
+func estimateArgBytes(a any) int {
+	switch v := a.(type) {
+	case string:
+		return len(v) + strings.Count(v, "'") + stringArgOverhead
+	case nil:
+		return nullArgBytes
+	case time.Time:
+		return timestampArgBytes
+	default:
+		return numericArgBytes
+	}
+}
+
+func (s *TrinoStore) estimateRowBytes(r Row) int {
+	n := len(s.rowPlaceholder) + 2 // placeholder group + ", " between groups
+	for _, a := range r.args() {
+		n += estimateArgBytes(a)
+	}
+	return n
+}
+
+// chunkRows greedily packs rows into chunks whose estimated sizes sum to at
+// most budget. Order is preserved and chunks are never empty; a single row
+// estimated above budget becomes its own chunk (rows are clamped beforehand,
+// so that only happens when the fixed per-row overhead exceeds the budget).
+func chunkRows(rows []Row, budget int, estimate func(Row) int) [][]Row {
+	var chunks [][]Row
+	var cur []Row
+	size := 0
+	for _, r := range rows {
+		n := estimate(r)
+		if len(cur) > 0 && size+n > budget {
+			chunks = append(chunks, cur)
+			cur, size = nil, 0
+		}
+		cur = append(cur, r)
+		size += n
+	}
+	if len(cur) > 0 {
+		chunks = append(chunks, cur)
+	}
+	return chunks
+}
+
+// clampRow guarantees a single row's estimated statement contribution fits the
+// budget by repeatedly shrinking the currently-largest string field (payload
+// fields win ties over identifier-ish ones via stringFields order). The loop
+// only continues while the estimate strictly decreases and is iteration-capped:
+// a stuck clamp would hang the flusher goroutine, which is strictly worse than
+// letting an unshrinkable row fail as its own chunk.
+func (s *TrinoStore) clampRow(r Row, budget int) Row {
+	est := s.estimateRowBytes(r)
+	for i := 0; est > budget && i < clampMaxIterations; i++ {
+		var largest *string
+		for _, f := range r.stringFields() {
+			if largest == nil || len(*f) > len(*largest) {
+				largest = f
+			}
+		}
+		if largest == nil || *largest == "" {
+			break
+		}
+		target := max(len(*largest)-(est-budget), len(*largest)/2)
+		*largest = truncate(*largest, target)
+		next := s.estimateRowBytes(r)
+		if next >= est {
+			break
+		}
+		est = next
+	}
+	return r
 }
 
 func (s *TrinoStore) ListQueries(ctx context.Context, f QueryFilter) ([]QuerySummary, error) {

@@ -70,9 +70,11 @@ in `serve`/`ui`.
 | `TRINO_TABLE` | `trino_query_log` | Table. |
 | `ICEBERG_LOCATION` | *(empty)* | Warehouse path (e.g. `gs://bucket/observability`) used by `init`/`ddl`. |
 | `BATCH_SIZE` | `100` | Max rows per flush. |
-| `FLUSH_INTERVAL` | `5s` | Max time before a partial batch flushes (manifests set `30s`). |
+| `FLUSH_INTERVAL` | `5s` | Max time before a partial batch flushes (manifests set `10m`). |
 | `BUFFER_CAPACITY` | `10000` | In-memory queue depth; events are dropped when full. |
-| `FLUSH_MAX_RETRIES` | `3` | Retries per failed flush before the batch is dropped. |
+| `FLUSH_MAX_RETRIES` | `3` | Retries per failed flush before the batch is dropped. Non-retryable errors (e.g. statement too large) skip retries. |
+| `MAX_STATEMENT_BYTES` | `700000` | Size budget per INSERT statement; each flush is split into chunks under it. Keep headroom below the cluster's `query.max-length` (default 1MB). |
+| `MAX_FIELD_BYTES` | `300000` | Per-field cap applied at ingest to `query_text`, `plan`, `json_plan`, `inputs_json`, and `error_message`; oversized values are truncated with a `[truncated N bytes]` marker. All other string fields are capped at 16KB. |
 | `RETENTION_DAYS` | `7` | Used by `prune`. |
 | `MAINTAIN_RETENTION` | `7d` | Snapshot/orphan age threshold for `maintain` (Trino enforces a catalog minimum). |
 | `METRICS_ENABLED` | `true` | Expose `/metrics` (Prometheus text). |
@@ -149,7 +151,7 @@ trino-query-log-sink query plan <queryId> --url http://localhost:8080 --top 10
 From the image (the client ships in the same binary):
 
 ```bash
-docker run --rm ghcr.io/shadi/trino-query-log-sink:TAG \
+docker run --rm ghcr.io/shadi/trino-log-sink:TAG \
   query list --url http://trino-query-log-sink.trino:8080
 ```
 

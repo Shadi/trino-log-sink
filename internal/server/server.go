@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/config"
-	"github.com/Shadi/trino-query-log-sink/internal/observability"
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/config"
+	"github.com/Shadi/trino-log-sink/internal/observability"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 //go:embed templates/*.html static/*

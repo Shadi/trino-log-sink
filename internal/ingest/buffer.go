@@ -6,12 +6,13 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 // Writer is the subset of store.Store the buffer needs. Narrowing it keeps the
@@ -24,7 +25,7 @@ type Writer interface {
 // concurrent use; the no-op default is used when none is supplied.
 type Observer interface {
 	Enqueued()
-	Dropped()
+	Dropped(n int)
 	Flushed(n int)
 	FlushFailed()
 }
@@ -32,7 +33,7 @@ type Observer interface {
 type NopObserver struct{}
 
 func (NopObserver) Enqueued()    {}
-func (NopObserver) Dropped()     {}
+func (NopObserver) Dropped(int)  {}
 func (NopObserver) Flushed(int)  {}
 func (NopObserver) FlushFailed() {}
 
@@ -94,9 +95,9 @@ func (b *Buffer) Add(r store.Row) {
 	case b.ch <- r:
 		b.obs.Enqueued()
 	case <-b.stop:
-		b.obs.Dropped()
+		b.obs.Dropped(1)
 	default:
-		b.obs.Dropped()
+		b.obs.Dropped(1)
 		b.log.Warn("ingest buffer full, dropping event", "query_id", r.QueryID)
 	}
 }
@@ -180,6 +181,10 @@ func (b *Buffer) flush(rows []store.Row) {
 			return
 		}
 		b.log.Error("flush failed", "attempt", attempt+1, "rows", len(rows), "error", err)
+		if errors.Is(err, store.ErrNonRetryable) {
+			b.log.Error("non-retryable flush error, skipping retries", "rows", len(rows))
+			break
+		}
 		if b.flushBase.Err() != nil {
 			break
 		}
@@ -192,6 +197,7 @@ func (b *Buffer) flush(rows []store.Row) {
 		}
 	}
 	b.obs.FlushFailed()
+	b.obs.Dropped(len(rows))
 	b.log.Error("dropping batch after exhausting retries", "rows", len(rows))
 }
 

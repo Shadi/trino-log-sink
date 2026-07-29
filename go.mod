@@ -1,4 +1,4 @@
-module github.com/Shadi/trino-query-log-sink
+module github.com/Shadi/trino-log-sink
 
 go 1.24.7
 

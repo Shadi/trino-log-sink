@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/Shadi/trino-query-log-sink/internal/event"
+	"github.com/Shadi/trino-log-sink/internal/event"
 )
 
 func RowFromEvent(e *event.Event) Row {

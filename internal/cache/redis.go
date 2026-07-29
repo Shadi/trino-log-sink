@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/config"
+	"github.com/Shadi/trino-log-sink/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 

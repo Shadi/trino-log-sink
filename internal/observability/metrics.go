@@ -39,7 +39,7 @@ func (m *Metrics) InvalidEvent()    { m.eventsInvalid.Add(1) }
 func (m *Metrics) SuppressedEvent() { m.eventsSuppressed.Add(1) }
 
 func (m *Metrics) Enqueued()     { m.rowsEnqueued.Add(1) }
-func (m *Metrics) Dropped()      { m.eventsDropped.Add(1) }
+func (m *Metrics) Dropped(n int) { m.eventsDropped.Add(int64(n)) }
 func (m *Metrics) Flushed(n int) { m.batchesFlushed.Add(1); m.rowsFlushed.Add(int64(n)) }
 func (m *Metrics) FlushFailed()  { m.flushFailures.Add(1) }
 
@@ -60,7 +60,7 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		{"events_invalid_total", "Events skipped because they failed validation.", m.eventsInvalid.Load()},
 		{"events_suppressed_total", "Events dropped because their source matched this service.", m.eventsSuppressed.Load()},
 		{"rows_enqueued_total", "Rows accepted into the in-memory buffer.", m.rowsEnqueued.Load()},
-		{"events_dropped_total", "Rows dropped because the buffer was full or closing.", m.eventsDropped.Load()},
+		{"events_dropped_total", "Rows dropped: buffer full or closing, or batch abandoned after flush failures.", m.eventsDropped.Load()},
 		{"batches_flushed_total", "Batches successfully written to Trino.", m.batchesFlushed.Load()},
 		{"rows_flushed_total", "Rows successfully written to Trino.", m.rowsFlushed.Load()},
 		{"flush_failures_total", "Batches dropped after exhausting flush retries.", m.flushFailures.Load()},

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/Shadi/trino-query-log-sink/internal/event"
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/event"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 const maxIngestBytes = 32 << 20
@@ -35,6 +35,6 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.buf.Add(store.RowFromEvent(&e))
+	s.buf.Add(store.RowFromEvent(&e).TruncateFields(s.cfg.MaxFieldBytes))
 	w.WriteHeader(http.StatusAccepted)
 }

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 type listEnvelope struct {

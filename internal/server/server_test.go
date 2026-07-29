@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/config"
-	"github.com/Shadi/trino-query-log-sink/internal/observability"
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/config"
+	"github.com/Shadi/trino-log-sink/internal/observability"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 type fakeStore struct {
@@ -98,6 +98,27 @@ func TestIngestValid(t *testing.T) {
 	}
 	if enq.rows[0].QueryID != "q-123" || enq.rows[0].CPUMS != 500 {
 		t.Errorf("row mapped wrong: %+v", enq.rows[0])
+	}
+}
+
+func TestIngestTruncatesOversizedFields(t *testing.T) {
+	enq := &fakeEnqueuer{}
+	cfg := config.Config{MetricsEnabled: true, MaxFieldBytes: 2048}
+	cfg.Trino.Source = "trino-query-log"
+	s := New(cfg, &fakeStore{}, enq, observability.NewMetrics(), nil, Options{Ingest: true})
+
+	huge := strings.Repeat("x", 100_000)
+	body := strings.Replace(validEvent, `"query": "SELECT 1"`, `"query": "`+huge+`"`, 1)
+	rec := postIngest(t, s, body)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if enq.count() != 1 {
+		t.Fatalf("expected 1 enqueued row, got %d", enq.count())
+	}
+	if got := enq.rows[0].QueryText; len(got) > 2048 || !strings.Contains(got, "[truncated ") {
+		t.Errorf("query_text not truncated to MaxFieldBytes: %d bytes", len(got))
 	}
 }
 

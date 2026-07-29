@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Shadi/trino-query-log-sink/internal/config"
+	"github.com/Shadi/trino-log-sink/internal/config"
 )
 
 func newTestStore(t *testing.T) *TrinoStore {

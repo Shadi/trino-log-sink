@@ -3,23 +3,27 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 type fakeWriter struct {
 	mu        sync.Mutex
 	batches   [][]store.Row
 	failTimes int
+	err       error
+	calls     atomic.Int64
 	started   chan struct{}
 	block     chan struct{}
 }
 
 func (f *fakeWriter) InsertBatch(_ context.Context, rows []store.Row) error {
+	f.calls.Add(1)
 	if f.started != nil {
 		f.started <- struct{}{}
 	}
@@ -30,6 +34,9 @@ func (f *fakeWriter) InsertBatch(_ context.Context, rows []store.Row) error {
 	defer f.mu.Unlock()
 	if f.failTimes > 0 {
 		f.failTimes--
+		if f.err != nil {
+			return f.err
+		}
 		return errors.New("boom")
 	}
 	f.batches = append(f.batches, append([]store.Row(nil), rows...))
@@ -45,7 +52,7 @@ func (f *fakeWriter) snapshot() [][]store.Row {
 type fakeObs struct{ enq, drop, flushed, failed atomic.Int64 }
 
 func (o *fakeObs) Enqueued()     { o.enq.Add(1) }
-func (o *fakeObs) Dropped()      { o.drop.Add(1) }
+func (o *fakeObs) Dropped(n int) { o.drop.Add(int64(n)) }
 func (o *fakeObs) Flushed(n int) { o.flushed.Add(int64(n)) }
 func (o *fakeObs) FlushFailed()  { o.failed.Add(1) }
 
@@ -139,6 +146,36 @@ func TestRetryThenSucceed(t *testing.T) {
 	})
 	if obs.failed.Load() != 0 {
 		t.Errorf("should not have recorded a flush failure")
+	}
+}
+
+func TestDropCountOnExhaustedRetries(t *testing.T) {
+	w := &fakeWriter{failTimes: 10}
+	obs := &fakeObs{}
+	b := New(w, Config{BatchSize: 2, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 1}, nil, obs)
+	defer b.Close(context.Background())
+
+	b.Add(row("a"))
+	b.Add(row("b"))
+
+	eventually(t, 3*time.Second, func() bool {
+		return obs.failed.Load() == 1 && obs.drop.Load() == 2
+	})
+}
+
+func TestNonRetryableSkipsRetries(t *testing.T) {
+	w := &fakeWriter{failTimes: 100, err: fmt.Errorf("insert 1 rows: %w", store.ErrNonRetryable)}
+	obs := &fakeObs{}
+	b := New(w, Config{BatchSize: 1, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3}, nil, obs)
+	defer b.Close(context.Background())
+
+	b.Add(row("a"))
+
+	eventually(t, 3*time.Second, func() bool {
+		return obs.failed.Load() == 1 && obs.drop.Load() == 1
+	})
+	if got := w.calls.Load(); got != 1 {
+		t.Errorf("non-retryable error should not be retried, got %d insert attempts", got)
 	}
 }
 

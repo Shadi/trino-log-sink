@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/cache"
-	"github.com/Shadi/trino-query-log-sink/internal/config"
+	"github.com/Shadi/trino-log-sink/internal/cache"
+	"github.com/Shadi/trino-log-sink/internal/config"
 )
 
 type countingStore struct {

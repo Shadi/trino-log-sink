@@ -24,14 +24,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/cache"
-	"github.com/Shadi/trino-query-log-sink/internal/config"
-	"github.com/Shadi/trino-query-log-sink/internal/ingest"
-	"github.com/Shadi/trino-query-log-sink/internal/observability"
-	"github.com/Shadi/trino-query-log-sink/internal/prune"
-	"github.com/Shadi/trino-query-log-sink/internal/querycli"
-	"github.com/Shadi/trino-query-log-sink/internal/server"
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/cache"
+	"github.com/Shadi/trino-log-sink/internal/config"
+	"github.com/Shadi/trino-log-sink/internal/ingest"
+	"github.com/Shadi/trino-log-sink/internal/observability"
+	"github.com/Shadi/trino-log-sink/internal/prune"
+	"github.com/Shadi/trino-log-sink/internal/querycli"
+	"github.com/Shadi/trino-log-sink/internal/server"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 func main() {

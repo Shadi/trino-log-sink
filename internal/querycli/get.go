@@ -6,8 +6,8 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/Shadi/trino-query-log-sink/internal/event"
-	"github.com/Shadi/trino-query-log-sink/internal/store"
+	"github.com/Shadi/trino-log-sink/internal/event"
+	"github.com/Shadi/trino-log-sink/internal/store"
 )
 
 type queryDetail struct {

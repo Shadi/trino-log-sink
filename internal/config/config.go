@@ -22,6 +22,9 @@ type Trino struct {
 	AccessToken  string
 	SSL          bool
 	QueryTimeout time.Duration
+	// MaxStatementBytes budgets the estimated text size of each INSERT the
+	// store sends; it must stay under the Trino cluster's query.max-length.
+	MaxStatementBytes int
 }
 
 type Cache struct {
@@ -46,6 +49,7 @@ type Config struct {
 	FlushInterval   time.Duration
 	BufferCapacity  int
 	FlushMaxRetries int
+	MaxFieldBytes   int
 
 	RetentionDays int
 
@@ -64,17 +68,18 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ListenAddr: e.str("LISTEN_ADDR", ":8080"),
 		Trino: Trino{
-			Host:         e.str("TRINO_HOST", "trino-cluster-trino.trino"),
-			Port:         e.intVal("TRINO_PORT", 8080),
-			User:         e.str("TRINO_USER", "trino-query-log"),
-			Source:       e.str("TRINO_SOURCE", "trino-query-log"),
-			Catalog:      e.str("TRINO_CATALOG", "gravitino"),
-			Schema:       e.str("TRINO_SCHEMA", "observability"),
-			Table:        e.str("TRINO_TABLE", "trino_query_log"),
-			Password:     e.str("TRINO_PASSWORD", ""),
-			AccessToken:  e.str("TRINO_ACCESS_TOKEN", ""),
-			SSL:          e.boolVal("TRINO_SSL", false),
-			QueryTimeout: e.duration("TRINO_QUERY_TIMEOUT", 60*time.Second),
+			Host:              e.str("TRINO_HOST", "trino-cluster-trino.trino"),
+			Port:              e.intVal("TRINO_PORT", 8080),
+			User:              e.str("TRINO_USER", "trino-query-log"),
+			Source:            e.str("TRINO_SOURCE", "trino-query-log"),
+			Catalog:           e.str("TRINO_CATALOG", "gravitino"),
+			Schema:            e.str("TRINO_SCHEMA", "observability"),
+			Table:             e.str("TRINO_TABLE", "trino_query_log"),
+			Password:          e.str("TRINO_PASSWORD", ""),
+			AccessToken:       e.str("TRINO_ACCESS_TOKEN", ""),
+			SSL:               e.boolVal("TRINO_SSL", false),
+			QueryTimeout:      e.duration("TRINO_QUERY_TIMEOUT", 60*time.Second),
+			MaxStatementBytes: e.intVal("MAX_STATEMENT_BYTES", 700_000),
 		},
 		Cache: Cache{
 			Addr:     e.str("REDIS_ADDR", ""),
@@ -89,6 +94,7 @@ func Load() (*Config, error) {
 		FlushInterval:     e.duration("FLUSH_INTERVAL", 5*time.Second),
 		BufferCapacity:    e.intVal("BUFFER_CAPACITY", 10000),
 		FlushMaxRetries:   e.intVal("FLUSH_MAX_RETRIES", 3),
+		MaxFieldBytes:     e.intVal("MAX_FIELD_BYTES", 300_000),
 		RetentionDays:     e.intVal("RETENTION_DAYS", 7),
 		MaintainRetention: e.str("MAINTAIN_RETENTION", "7d"),
 		OptimizeDays:      e.intVal("OPTIMIZE_DAYS", 1),
@@ -122,6 +128,8 @@ func (c *Config) validate() []error {
 	add(c.FlushInterval <= 0, "FLUSH_INTERVAL must be > 0")
 	add(c.BufferCapacity < 1, "BUFFER_CAPACITY must be >= 1")
 	add(c.FlushMaxRetries < 0, "FLUSH_MAX_RETRIES must be >= 0")
+	add(c.Trino.MaxStatementBytes < 16384, "MAX_STATEMENT_BYTES must be >= 16384")
+	add(c.MaxFieldBytes < 1024, "MAX_FIELD_BYTES must be >= 1024")
 	add(c.RetentionDays < 0, "RETENTION_DAYS must be >= 0")
 	add(c.OptimizeDays < 0, "OPTIMIZE_DAYS must be >= 0")
 

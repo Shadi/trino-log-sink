@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Shadi/trino-query-log-sink/internal/event"
+	"github.com/Shadi/trino-log-sink/internal/event"
 )
 
 func ptr[T any](v T) *T { return &v }

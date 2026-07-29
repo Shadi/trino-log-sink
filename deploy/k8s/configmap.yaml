@@ -28,6 +28,16 @@ data:
   FLUSH_INTERVAL: "10m"
   BUFFER_CAPACITY: "5000"
   FLUSH_MAX_RETRIES: "3"
+  # Statement sizing. Each flush is split into INSERTs whose estimated text
+  # stays under MAX_STATEMENT_BYTES (headroom below Trino's query.max-length,
+  # default 1000000). Oversized event fields (query_text, plan, json_plan,
+  # inputs_json, error_message) are truncated to MAX_FIELD_BYTES at ingest
+  # with a "[truncated N bytes]" marker.
+  MAX_STATEMENT_BYTES: "700000"
+  MAX_FIELD_BYTES: "300000"
+  # Per-query timeout; also bounds a whole flush. A 10-minute batch splits into
+  # several INSERTs at ~15-25s per Iceberg commit, so 60s is not enough.
+  TRINO_QUERY_TIMEOUT: "300s"
   # Retention (prune), compaction window (optimize), snapshot/orphan TTL (maintain).
   RETENTION_DAYS: "7"
   OPTIMIZE_DAYS: "1"
