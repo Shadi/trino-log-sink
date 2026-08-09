@@ -52,7 +52,7 @@ func (r *Row) largeFields() []*string {
 func (r *Row) smallFields() []*string {
 	return []*string{
 		&r.QueryID, &r.QueryState, &r.QueryType, &r.UserName, &r.Source, &r.Principal,
-		&r.ClientTags, &r.Catalog, &r.SchemaName, &r.UpdateType, &r.ErrorCode, &r.ErrorType,
+		&r.ClientTags, &r.Catalog, &r.SchemaName, &r.QueryPreview, &r.UpdateType, &r.ErrorCode, &r.ErrorType,
 		&r.ResourceGroup, &r.ServerVersion, &r.Environment,
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,8 @@ type execRecord struct {
 	query    string
 	args     int
 	argBytes int // total bytes of string args
+	ids      []string
+	failed   bool
 }
 
 // fakeConnector satisfies driver.Connector and hands out conns that record
@@ -36,6 +39,22 @@ func (c *fakeConnector) records() []execRecord {
 	return append([]execRecord(nil), c.execs...)
 }
 
+func (c *fakeConnector) stopFailing() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.err, c.errAt = nil, -1
+}
+
+func (c *fakeConnector) committedIDs() []string {
+	var out []string
+	for _, e := range c.records() {
+		if !e.failed {
+			out = append(out, e.ids...)
+		}
+	}
+	return out
+}
+
 type fakeConn struct{ c *fakeConnector }
 
 func (fc *fakeConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("prepare unused") }
@@ -47,14 +66,17 @@ func (fc *fakeConn) ExecContext(_ context.Context, query string, args []driver.N
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rec := execRecord{query: query, args: len(args)}
-	for _, a := range args {
+	for i, a := range args {
 		if s, ok := a.Value.(string); ok {
 			rec.argBytes += len(s)
+			if i%len(schemaColumns) == 0 {
+				rec.ids = append(rec.ids, s)
+			}
 		}
 	}
-	idx := len(c.execs)
+	rec.failed = c.err != nil && len(c.execs) == c.errAt
 	c.execs = append(c.execs, rec)
-	if c.err != nil && idx == c.errAt {
+	if rec.failed {
 		return nil, c.err
 	}
 	return driver.RowsAffected(0), nil
@@ -136,6 +158,88 @@ func TestInsertBatchFailFastNonRetryable(t *testing.T) {
 	}
 	if n := len(fc.records()); n != 1 {
 		t.Errorf("fail-fast violated: %d execs after first chunk failed", n)
+	}
+}
+
+func multiChunkBatch(t *testing.T, s *TrinoStore) []Row {
+	t.Helper()
+	rows := make([]Row, 6)
+	for i := range rows {
+		rows[i] = Row{QueryID: fmt.Sprintf("q-%d", i), Plan: strings.Repeat("p", 12_000), CreateTime: testTime}
+	}
+	if chunks := s.SplitBatch(rows); len(chunks) < 2 {
+		t.Fatalf("test needs a batch that splits, got %d chunk(s)", len(chunks))
+	}
+	return rows
+}
+
+func TestInsertBatchReportsCommittedPrefix(t *testing.T) {
+	failure := errors.New("trino unavailable")
+	fc := &fakeConnector{errAt: 1, err: failure}
+	s := newFakeDBStore(t, fc)
+	s.maxStmtBytes = 40_000
+	rows := multiChunkBatch(t, s)
+	firstChunk := len(s.SplitBatch(rows)[0])
+
+	err := s.InsertBatch(context.Background(), rows)
+
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var pce *PartialCommitError
+	if !errors.As(err, &pce) {
+		t.Fatalf("mid-batch failure must report its committed prefix, got %T: %v", err, err)
+	}
+	if pce.Committed != firstChunk || CommittedRows(err) != firstChunk {
+		t.Errorf("committed = %d (CommittedRows %d), want %d", pce.Committed, CommittedRows(err), firstChunk)
+	}
+	if !errors.Is(err, failure) {
+		t.Errorf("underlying failure must stay in the chain: %v", err)
+	}
+	if n := len(fc.records()); n != 2 {
+		t.Errorf("insert should stop at the first failed chunk: %d execs", n)
+	}
+}
+
+func TestInsertBatchOfSplitChunkStaysOneStatement(t *testing.T) {
+	fc := &fakeConnector{errAt: -1}
+	s := newFakeDBStore(t, fc)
+	s.maxStmtBytes = 40_000
+	chunks := s.SplitBatch(multiChunkBatch(t, s))
+
+	for _, chunk := range chunks {
+		if err := s.InsertBatch(context.Background(), chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := len(fc.records()); got != len(chunks) {
+		t.Errorf("%d statements for %d chunks: a chunk must map to one commit for callers to resume on chunk boundaries", got, len(chunks))
+	}
+}
+
+func TestInsertBatchRetryOfRemainderDoesNotDuplicate(t *testing.T) {
+	fc := &fakeConnector{errAt: 1, err: errors.New("trino unavailable")}
+	s := newFakeDBStore(t, fc)
+	s.maxStmtBytes = 40_000
+	rows := multiChunkBatch(t, s)
+
+	committed := CommittedRows(s.InsertBatch(context.Background(), rows))
+	if committed == 0 || committed >= len(rows) {
+		t.Fatalf("committed = %d, want a strict prefix of %d rows", committed, len(rows))
+	}
+
+	fc.stopFailing()
+	if err := s.InsertBatch(context.Background(), rows[committed:]); err != nil {
+		t.Fatalf("retry of the uncommitted remainder: %v", err)
+	}
+
+	want := make([]string, len(rows))
+	for i, r := range rows {
+		want[i] = r.QueryID
+	}
+	if got := fc.committedIDs(); !slices.Equal(got, want) {
+		t.Errorf("committed rows = %v, want %v exactly once each", got, want)
 	}
 }
 

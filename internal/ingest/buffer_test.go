@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,6 +177,182 @@ func TestNonRetryableSkipsRetries(t *testing.T) {
 	})
 	if got := w.calls.Load(); got != 1 {
 		t.Errorf("non-retryable error should not be retried, got %d insert attempts", got)
+	}
+}
+
+type partialWriter struct {
+	mu           sync.Mutex
+	failsLeft    int
+	commitOnFail int
+	inserted     []string
+	callSizes    []int
+}
+
+func (w *partialWriter) InsertBatch(_ context.Context, rows []store.Row) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.callSizes = append(w.callSizes, len(rows))
+	if w.failsLeft > 0 {
+		w.failsLeft--
+		n := min(w.commitOnFail, len(rows))
+		w.record(rows[:n])
+		return &store.PartialCommitError{Committed: n, Err: errors.New("chunk boundary failure")}
+	}
+	w.record(rows)
+	return nil
+}
+
+func (w *partialWriter) record(rows []store.Row) {
+	for _, r := range rows {
+		w.inserted = append(w.inserted, r.QueryID)
+	}
+}
+
+func (w *partialWriter) state() ([]string, []int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.inserted), slices.Clone(w.callSizes)
+}
+
+type chunkedWriter struct {
+	mu        sync.Mutex
+	chunkSize int
+	delay     time.Duration
+	failAt    int
+	calls     [][]string
+	inserted  []string
+}
+
+func (w *chunkedWriter) SplitBatch(rows []store.Row) [][]store.Row {
+	var out [][]store.Row
+	for i := 0; i < len(rows); i += w.chunkSize {
+		out = append(out, rows[i:min(i+w.chunkSize, len(rows))])
+	}
+	return out
+}
+
+func (w *chunkedWriter) InsertBatch(ctx context.Context, rows []store.Row) error {
+	if w.delay > 0 {
+		select {
+		case <-time.After(w.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.QueryID
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.calls = append(w.calls, ids)
+	if len(w.calls) == w.failAt {
+		return errors.New("chunk write failed")
+	}
+	w.inserted = append(w.inserted, ids...)
+	return nil
+}
+
+func (w *chunkedWriter) state() ([]string, [][]string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.inserted), slices.Clone(w.calls)
+}
+
+func ids(prefix string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s-%d", prefix, i)
+	}
+	return out
+}
+
+func addAll(b *Buffer, list []string) {
+	for _, id := range list {
+		b.Add(row(id))
+	}
+}
+
+func TestRetryAfterPartialCommitReplaysOnlyRemainder(t *testing.T) {
+	w := &partialWriter{failsLeft: 1, commitOnFail: 2}
+	obs := &fakeObs{}
+	b := New(w, Config{BatchSize: 5, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3}, nil, obs)
+	defer b.Close(context.Background())
+
+	want := ids("q", 5)
+	addAll(b, want)
+
+	eventually(t, 3*time.Second, func() bool { return obs.flushed.Load() == 5 })
+
+	inserted, sizes := w.state()
+	if !slices.Equal(inserted, want) {
+		t.Errorf("inserted %v, want %v exactly once each", inserted, want)
+	}
+	if !slices.Equal(sizes, []int{5, 3}) {
+		t.Errorf("retry sizes %v, want [5 3] — the committed prefix must not be replayed", sizes)
+	}
+	if obs.drop.Load() != 0 {
+		t.Errorf("nothing should be dropped, got %d", obs.drop.Load())
+	}
+}
+
+func TestRetryReplaysOnlyUncommittedChunks(t *testing.T) {
+	w := &chunkedWriter{chunkSize: 2, failAt: 2}
+	obs := &fakeObs{}
+	b := New(w, Config{BatchSize: 6, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3}, nil, obs)
+	defer b.Close(context.Background())
+
+	want := ids("q", 6)
+	addAll(b, want)
+
+	eventually(t, 3*time.Second, func() bool { return obs.flushed.Load() == 6 })
+
+	inserted, calls := w.state()
+	if !slices.Equal(inserted, want) {
+		t.Errorf("inserted %v, want %v exactly once each", inserted, want)
+	}
+	wantCalls := [][]string{{"q-0", "q-1"}, {"q-2", "q-3"}, {"q-2", "q-3"}, {"q-4", "q-5"}}
+	if len(calls) != len(wantCalls) {
+		t.Fatalf("statements %v, want %v", calls, wantCalls)
+	}
+	for i, c := range calls {
+		if !slices.Equal(c, wantCalls[i]) {
+			t.Errorf("statement %d = %v, want %v", i, c, wantCalls[i])
+		}
+	}
+	if obs.drop.Load() != 0 {
+		t.Errorf("nothing should be dropped, got %d", obs.drop.Load())
+	}
+}
+
+func TestFlushTimeoutAppliesPerChunk(t *testing.T) {
+	const perChunk = 30 * time.Millisecond
+	w := &chunkedWriter{chunkSize: 2, delay: perChunk}
+	obs := &fakeObs{}
+	b := New(w, Config{
+		BatchSize: 12, FlushInterval: time.Hour, BufferCapacity: 20,
+		MaxRetries: 0, FlushTimeout: 5 * perChunk,
+	}, nil, obs)
+	defer b.Close(context.Background())
+
+	want := ids("q", 12)
+	addAll(b, want)
+
+	eventually(t, 5*time.Second, func() bool { return obs.flushed.Load() == 12 })
+
+	inserted, calls := w.state()
+	if len(calls) != 6 {
+		t.Errorf("expected one statement per chunk, got %d", len(calls))
+	}
+	if !slices.Equal(inserted, want) {
+		t.Errorf("inserted %v, want %v — a whole-batch deadline expired mid-batch", inserted, want)
+	}
+	if obs.failed.Load() != 0 || obs.drop.Load() != 0 {
+		t.Errorf("no chunk should have timed out: failures=%d dropped=%d", obs.failed.Load(), obs.drop.Load())
 	}
 }
 

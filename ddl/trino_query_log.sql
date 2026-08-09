@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS "gravitino"."observability"."trino_query_log" (
   "catalog" varchar,
   "schema_name" varchar,
   "query_text" varchar,
+  "query_preview" varchar,
   "update_type" varchar,
   "create_time" timestamp(6) with time zone,
   "execution_start_time" timestamp(6) with time zone,
@@ -52,5 +53,7 @@ CREATE TABLE IF NOT EXISTS "gravitino"."observability"."trino_query_log" (
   "server_version" varchar,
   "environment" varchar
 ) WITH (
-  partitioning = ARRAY['day(create_time)']
+  partitioning = ARRAY['day(create_time)'],
+  sorted_by = ARRAY['create_time'],
+  extra_properties = MAP(ARRAY['write.metadata.delete-after-commit.enabled'], ARRAY['true'])
 );

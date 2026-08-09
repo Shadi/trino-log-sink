@@ -35,6 +35,10 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.buf.Add(store.RowFromEvent(&e).TruncateFields(s.cfg.MaxFieldBytes))
+	row := store.RowFromEvent(&e).
+		ApplyPlanPolicy(store.PlanPolicy{Capture: s.cfg.PlanCapture, MinWall: s.cfg.PlanCaptureMinWall}).
+		WithPreview(s.cfg.PreviewBytes).
+		TruncateFields(s.cfg.MaxFieldBytes)
+	s.buf.Add(row)
 	w.WriteHeader(http.StatusAccepted)
 }

@@ -7,41 +7,33 @@ metadata:
     app.kubernetes.io/name: trino-query-log-sink
 data:
   LISTEN_ADDR: ":8080"
-  # Trino coordinator this service reads from and writes to.
   TRINO_HOST: "trino-cluster-trino.trino"
   TRINO_PORT: "8080"
   TRINO_USER: "trino-query-log"
-  # Session source used to tag this service's own queries so they are excluded
-  # from the log (feedback-loop suppression).
   TRINO_SOURCE: "trino-query-log"
-  # Iceberg target. Dedicated catalog/bucket for the query log (separate from the
-  # gravitino lakehouse catalog).
   TRINO_CATALOG: "querylog"
   TRINO_SCHEMA: "observability"
   TRINO_TABLE: "trino_query_log"
-  # Iceberg warehouse location used by the `init` subcommand / DDL. Replace the
-  # bucket, or leave empty if the catalog already has a warehouse configured.
   ICEBERG_LOCATION: ""
-  # Batching. Larger BATCH_SIZE + longer FLUSH_INTERVAL = fewer, bigger Iceberg
-  # files (the flush writes one file). FLUSH_INTERVAL is also the max UI lag.
   BATCH_SIZE: "2000"
   FLUSH_INTERVAL: "10m"
   BUFFER_CAPACITY: "5000"
   FLUSH_MAX_RETRIES: "3"
-  # Statement sizing. Each flush is split into INSERTs whose estimated text
-  # stays under MAX_STATEMENT_BYTES (headroom below Trino's query.max-length,
-  # default 1000000). Oversized event fields (query_text, plan, json_plan,
-  # inputs_json, error_message) are truncated to MAX_FIELD_BYTES at ingest
-  # with a "[truncated N bytes]" marker.
   MAX_STATEMENT_BYTES: "700000"
   MAX_FIELD_BYTES: "300000"
-  # Per-query timeout; also bounds a whole flush. A 10-minute batch splits into
-  # several INSERTs at ~15-25s per Iceberg commit, so 60s is not enough.
   TRINO_QUERY_TIMEOUT: "300s"
-  # Retention (prune), compaction window (optimize), snapshot/orphan TTL (maintain).
-  RETENTION_DAYS: "7"
+  PLAN_CAPTURE: "slow_or_failed"
+  PLAN_CAPTURE_MIN_WALL: "2m"
+  QUERY_PREVIEW_BYTES: "200"
+  RETENTION_DAYS: "2"
   OPTIMIZE_DAYS: "1"
-  MAINTAIN_RETENTION: "7d"
-  # Observability.
+  MAINTAIN_RETENTION: "6h"
+  READINESS_MODE: "connection"
+  READINESS_INTERVAL: "30s"
+  READINESS_FAIL_INTERVAL: "30s"
+  READINESS_TIMEOUT: "10s"
   METRICS_ENABLED: "true"
   LOG_LEVEL: "info"
+  REDIS_ADDR: ""
+  CACHE_LIST_TTL: "10m"
+  CACHE_QUERY_TTL: "48h"

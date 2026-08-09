@@ -21,6 +21,10 @@ type Writer interface {
 	InsertBatch(ctx context.Context, rows []store.Row) error
 }
 
+type batchSplitter interface {
+	SplitBatch(rows []store.Row) [][]store.Row
+}
+
 // Observer receives buffer lifecycle counts. Implementations must be safe for
 // concurrent use; the no-op default is used when none is supplied.
 type Observer interface {
@@ -170,17 +174,20 @@ func (b *Buffer) flush(rows []store.Row) {
 
 	backoff := 100 * time.Millisecond
 	for attempt := 0; attempt <= b.cfg.MaxRetries; attempt++ {
-		ctx, cancel := context.WithTimeout(b.flushBase, b.cfg.FlushTimeout)
 		start := time.Now()
-		err := b.w.InsertBatch(ctx, rows)
-		cancel()
-		if err == nil {
+		committed, err := b.insert(rows)
+		committed = min(max(committed, 0), len(rows))
+		if committed > 0 {
 			b.lastFlushUnixMs.Store(time.Now().UnixMilli())
 			b.lastFlushDurationMs.Store(time.Since(start).Milliseconds())
-			b.obs.Flushed(len(rows))
+			b.obs.Flushed(committed)
+			rows = rows[committed:]
+		}
+		if err == nil {
 			return
 		}
-		b.log.Error("flush failed", "attempt", attempt+1, "rows", len(rows), "error", err)
+		b.log.Error("flush failed",
+			"attempt", attempt+1, "committed", committed, "remaining", len(rows), "error", err)
 		if errors.Is(err, store.ErrNonRetryable) {
 			b.log.Error("non-retryable flush error, skipping retries", "rows", len(rows))
 			break
@@ -199,6 +206,29 @@ func (b *Buffer) flush(rows []store.Row) {
 	b.obs.FlushFailed()
 	b.obs.Dropped(len(rows))
 	b.log.Error("dropping batch after exhausting retries", "rows", len(rows))
+}
+
+func (b *Buffer) insert(rows []store.Row) (int, error) {
+	committed := 0
+	for _, chunk := range b.split(rows) {
+		ctx, cancel := context.WithTimeout(b.flushBase, b.cfg.FlushTimeout)
+		err := b.w.InsertBatch(ctx, chunk)
+		cancel()
+		if err != nil {
+			return committed + store.CommittedRows(err), err
+		}
+		committed += len(chunk)
+	}
+	return committed, nil
+}
+
+func (b *Buffer) split(rows []store.Row) [][]store.Row {
+	if s, ok := b.w.(batchSplitter); ok {
+		if chunks := s.SplitBatch(rows); len(chunks) > 0 {
+			return chunks
+		}
+	}
+	return [][]store.Row{rows}
 }
 
 func dedupe(rows []store.Row) []store.Row {

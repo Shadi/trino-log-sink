@@ -23,6 +23,7 @@ type countingStore struct {
 }
 
 func (c *countingStore) Validate(context.Context) error            { return nil }
+func (c *countingStore) ValidateTable(context.Context) error       { return nil }
 func (c *countingStore) InsertBatch(context.Context, []Row) error  { return nil }
 func (c *countingStore) Prune(context.Context, time.Time) error    { return nil }
 func (c *countingStore) Maintain(context.Context, string) error    { return nil }

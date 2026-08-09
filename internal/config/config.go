@@ -39,17 +39,40 @@ type Cache struct {
 
 func (c Cache) Enabled() bool { return c.Addr != "" }
 
+const (
+	ReadinessConnection = "connection"
+	ReadinessTable      = "table"
+)
+
+type Readiness struct {
+	Mode         string
+	Interval     time.Duration
+	FailInterval time.Duration
+	Timeout      time.Duration
+}
+
+const (
+	PlanCaptureAll          = "all"
+	PlanCaptureSlowOrFailed = "slow_or_failed"
+	PlanCaptureNone         = "none"
+)
+
 type Config struct {
 	ListenAddr string
 
-	Trino Trino
-	Cache Cache
+	Trino     Trino
+	Cache     Cache
+	Readiness Readiness
 
 	BatchSize       int
 	FlushInterval   time.Duration
 	BufferCapacity  int
 	FlushMaxRetries int
 	MaxFieldBytes   int
+
+	PlanCapture        string
+	PlanCaptureMinWall time.Duration
+	PreviewBytes       int
 
 	RetentionDays int
 
@@ -90,17 +113,26 @@ func Load() (*Config, error) {
 			QueryTTL: e.duration("CACHE_QUERY_TTL", time.Hour),
 			Timeout:  e.duration("CACHE_TIMEOUT", 250*time.Millisecond),
 		},
-		BatchSize:         e.intVal("BATCH_SIZE", 100),
-		FlushInterval:     e.duration("FLUSH_INTERVAL", 5*time.Second),
-		BufferCapacity:    e.intVal("BUFFER_CAPACITY", 10000),
-		FlushMaxRetries:   e.intVal("FLUSH_MAX_RETRIES", 3),
-		MaxFieldBytes:     e.intVal("MAX_FIELD_BYTES", 300_000),
-		RetentionDays:     e.intVal("RETENTION_DAYS", 7),
-		MaintainRetention: e.str("MAINTAIN_RETENTION", "7d"),
-		OptimizeDays:      e.intVal("OPTIMIZE_DAYS", 1),
-		MetricsEnabled:    e.boolVal("METRICS_ENABLED", true),
-		LogLevel:          e.str("LOG_LEVEL", "info"),
-		IcebergLocation:   e.str("ICEBERG_LOCATION", ""),
+		Readiness: Readiness{
+			Mode:         e.str("READINESS_MODE", ReadinessConnection),
+			Interval:     e.duration("READINESS_INTERVAL", 30*time.Second),
+			FailInterval: e.duration("READINESS_FAIL_INTERVAL", 30*time.Second),
+			Timeout:      e.duration("READINESS_TIMEOUT", 10*time.Second),
+		},
+		BatchSize:          e.intVal("BATCH_SIZE", 100),
+		FlushInterval:      e.duration("FLUSH_INTERVAL", 5*time.Second),
+		BufferCapacity:     e.intVal("BUFFER_CAPACITY", 10000),
+		FlushMaxRetries:    e.intVal("FLUSH_MAX_RETRIES", 3),
+		MaxFieldBytes:      e.intVal("MAX_FIELD_BYTES", 300_000),
+		PlanCapture:        e.str("PLAN_CAPTURE", PlanCaptureSlowOrFailed),
+		PlanCaptureMinWall: e.duration("PLAN_CAPTURE_MIN_WALL", 10*time.Second),
+		PreviewBytes:       e.intVal("QUERY_PREVIEW_BYTES", 200),
+		RetentionDays:      e.intVal("RETENTION_DAYS", 7),
+		MaintainRetention:  e.str("MAINTAIN_RETENTION", "7d"),
+		OptimizeDays:       e.intVal("OPTIMIZE_DAYS", 1),
+		MetricsEnabled:     e.boolVal("METRICS_ENABLED", true),
+		LogLevel:           e.str("LOG_LEVEL", "info"),
+		IcebergLocation:    e.str("ICEBERG_LOCATION", ""),
 	}
 
 	if err := errors.Join(append(e.errs, cfg.validate()...)...); err != nil {
@@ -132,6 +164,23 @@ func (c *Config) validate() []error {
 	add(c.MaxFieldBytes < 1024, "MAX_FIELD_BYTES must be >= 1024")
 	add(c.RetentionDays < 0, "RETENTION_DAYS must be >= 0")
 	add(c.OptimizeDays < 0, "OPTIMIZE_DAYS must be >= 0")
+	add(c.Readiness.Interval <= 0, "READINESS_INTERVAL must be > 0")
+	add(c.Readiness.FailInterval <= 0, "READINESS_FAIL_INTERVAL must be > 0")
+	add(c.Readiness.Timeout <= 0, "READINESS_TIMEOUT must be > 0")
+	add(c.PlanCaptureMinWall < 0, "PLAN_CAPTURE_MIN_WALL must be >= 0")
+	add(c.PreviewBytes < 1, "QUERY_PREVIEW_BYTES must be >= 1")
+
+	switch c.Readiness.Mode {
+	case ReadinessConnection, ReadinessTable:
+	default:
+		add(true, "READINESS_MODE must be one of connection, table")
+	}
+
+	switch c.PlanCapture {
+	case PlanCaptureAll, PlanCaptureSlowOrFailed, PlanCaptureNone:
+	default:
+		add(true, "PLAN_CAPTURE must be one of all, slow_or_failed, none")
+	}
 
 	if c.Cache.Enabled() {
 		add(c.Cache.DB < 0, "REDIS_DB must be >= 0")

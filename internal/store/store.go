@@ -11,11 +11,13 @@ import (
 // Store persists and reads back query-log rows. Writes and reads both go
 // through Trino.
 type Store interface {
-	// Validate confirms the configured catalog/schema/table are reachable.
+	// Validate confirms Trino is reachable, without reading the query log table.
 	Validate(ctx context.Context) error
+	// ValidateTable also confirms the query log table is readable.
+	ValidateTable(ctx context.Context) error
 	// InsertBatch writes rows using one or more multi-row INSERTs, splitting
 	// so each statement stays under the configured statement-size budget.
-	// Chunks are not atomic: a failure can leave earlier chunks committed.
+	// Chunks are not atomic; a partial failure returns *PartialCommitError.
 	InsertBatch(ctx context.Context, rows []Row) error
 	// ListQueries returns lightweight summaries matching the filter.
 	ListQueries(ctx context.Context, f QueryFilter) ([]QuerySummary, error)
@@ -46,6 +48,7 @@ var schemaColumns = []column{
 	{"catalog", "varchar"},
 	{"schema_name", "varchar"},
 	{"query_text", "varchar"},
+	{"query_preview", "varchar"},
 	{"update_type", "varchar"},
 	{"create_time", "timestamp(6) with time zone"},
 	{"execution_start_time", "timestamp(6) with time zone"},
@@ -89,6 +92,7 @@ type Row struct {
 	Catalog              string     `json:"catalog"`
 	SchemaName           string     `json:"schemaName"`
 	QueryText            string     `json:"queryText"`
+	QueryPreview         string     `json:"queryPreview"`
 	UpdateType           string     `json:"updateType"`
 	CreateTime           time.Time  `json:"createTime"`
 	ExecutionStartTime   *time.Time `json:"executionStartTime"`
@@ -124,7 +128,7 @@ type Row struct {
 func (r Row) args() []any {
 	return []any{
 		r.QueryID, r.QueryState, r.QueryType, r.UserName, r.Source, r.Principal, r.ClientTags,
-		r.Catalog, r.SchemaName, r.QueryText, r.UpdateType, r.CreateTime, timeArg(r.ExecutionStartTime), timeArg(r.EndTime),
+		r.Catalog, r.SchemaName, r.QueryText, r.QueryPreview, r.UpdateType, r.CreateTime, timeArg(r.ExecutionStartTime), timeArg(r.EndTime),
 		r.QueuedMS, r.AnalysisMS, r.PlanningMS, r.ExecutionMS, r.WallMS, r.CPUMS,
 		r.PeakUserMemoryBytes, r.PeakTotalMemoryBytes, r.PhysicalInputBytes, r.PhysicalInputRows,
 		r.ProcessedInputBytes, r.ProcessedInputRows, r.OutputBytes, r.OutputRows, r.WrittenBytes, r.WrittenRows,

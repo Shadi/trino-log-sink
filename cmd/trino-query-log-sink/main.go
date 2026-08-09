@@ -273,15 +273,26 @@ func runOptimize(cfg *config.Config, log *slog.Logger) error {
 	}
 	defer st.Close()
 
-	since := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -cfg.OptimizeDays)
+	since := optimizeWindowStart(time.Now(), cfg.OptimizeDays)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	log.Info("optimizing table", "table", cfg.Trino.Table, "since", since.Format(time.RFC3339))
+	log.Info("optimizing table", "table", cfg.Trino.Table,
+		"since", since.Format(time.RFC3339), "optimize_days", cfg.OptimizeDays)
 	if err := st.Optimize(ctx, since); err != nil {
 		return err
 	}
 	log.Info("optimize complete")
 	return nil
+}
+
+func optimizeWindowStart(now time.Time, optimizeDaysIncludingToday int) time.Time {
+	daysCovered := optimizeDaysIncludingToday
+	if daysCovered < 1 {
+		daysCovered = 1
+	}
+	utc := now.UTC()
+	startOfToday := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+	return startOfToday.AddDate(0, 0, -(daysCovered - 1))
 }
 
 func printDDL(cfg *config.Config) error {

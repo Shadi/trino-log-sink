@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +27,7 @@ type fakeStore struct {
 }
 
 func (f *fakeStore) Validate(context.Context) error                 { return nil }
+func (f *fakeStore) ValidateTable(context.Context) error            { return nil }
 func (f *fakeStore) InsertBatch(context.Context, []store.Row) error { return nil }
 func (f *fakeStore) ListQueries(context.Context, store.QueryFilter) ([]store.QuerySummary, error) {
 	return f.list, f.listErr
@@ -41,6 +45,26 @@ func (f *fakeStore) Prune(context.Context, time.Time) error    { return nil }
 func (f *fakeStore) Maintain(context.Context, string) error    { return nil }
 func (f *fakeStore) Optimize(context.Context, time.Time) error { return nil }
 func (f *fakeStore) Close() error                              { return nil }
+
+type probeStore struct {
+	fakeStore
+	err              error
+	connectionProbes atomic.Int64
+	tableProbes      atomic.Int64
+}
+
+func (p *probeStore) Validate(context.Context) error {
+	p.connectionProbes.Add(1)
+	return p.err
+}
+
+func (p *probeStore) ValidateTable(context.Context) error {
+	p.tableProbes.Add(1)
+	return p.err
+}
+
+func (p *probeStore) connectionCount() int64 { return p.connectionProbes.Load() }
+func (p *probeStore) tableCount() int64      { return p.tableProbes.Load() }
 
 type fakeEnqueuer struct {
 	mu   sync.Mutex
@@ -63,9 +87,18 @@ func newTestServer(st store.Store, enq Enqueuer) *Server {
 }
 
 func newTestServerWith(st store.Store, enq Enqueuer, opts Options) *Server {
-	cfg := config.Config{MetricsEnabled: true}
+	cfg := config.Config{MetricsEnabled: true, Readiness: defaultTestReadiness()}
 	cfg.Trino.Source = "trino-query-log"
 	return New(cfg, st, enq, observability.NewMetrics(), nil, opts)
+}
+
+func defaultTestReadiness() config.Readiness {
+	return config.Readiness{
+		Mode:         config.ReadinessConnection,
+		Interval:     30 * time.Second,
+		FailInterval: 30 * time.Second,
+		Timeout:      10 * time.Second,
+	}
 }
 
 const validEvent = `{
@@ -256,6 +289,106 @@ func canceledCtx() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
+}
+
+func newReadinessServer(st store.Store, readiness config.Readiness) *Server {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return New(config.Config{Readiness: readiness}, st, &fakeEnqueuer{}, observability.NewMetrics(), log, Options{})
+}
+
+func TestRunReadinessUsesConfiguredIntervals(t *testing.T) {
+	const probeEvery = 10 * time.Millisecond
+	const beyondTest = time.Hour
+
+	cases := []struct {
+		name         string
+		mode         string
+		validateErr  error
+		interval     time.Duration
+		failInterval time.Duration
+	}{
+		{"connection mode ready probes at interval", config.ReadinessConnection, nil, probeEvery, beyondTest},
+		{"connection mode not ready probes at fail interval", config.ReadinessConnection, errors.New("trino unreachable"), beyondTest, probeEvery},
+		{"table mode ready probes at interval", config.ReadinessTable, nil, probeEvery, beyondTest},
+		{"table mode not ready probes at fail interval", config.ReadinessTable, errors.New("table unreachable"), beyondTest, probeEvery},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &probeStore{err: tc.validateErr}
+			s := newReadinessServer(st, config.Readiness{
+				Mode:         tc.mode,
+				Interval:     tc.interval,
+				FailInterval: tc.failInterval,
+				Timeout:      time.Second,
+			})
+
+			probed, skipped := st.connectionCount, st.tableCount
+			probedMethod, skippedMethod := "Validate", "ValidateTable"
+			if tc.mode == config.ReadinessTable {
+				probed, skipped = st.tableCount, st.connectionCount
+				probedMethod, skippedMethod = "ValidateTable", "Validate"
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan struct{})
+			start := time.Now()
+			go func() {
+				defer close(done)
+				s.RunReadiness(ctx)
+			}()
+
+			const wantProbes = 3
+			giveUp := time.After(5 * time.Second)
+			for probed() < wantProbes {
+				select {
+				case <-giveUp:
+					t.Fatalf("%s called %d times in %s, want at least %d at a %s interval",
+						probedMethod, probed(), time.Since(start), wantProbes, probeEvery)
+				case <-time.After(probeEvery):
+				}
+			}
+			elapsed := time.Since(start)
+			cancel()
+			<-done
+
+			if got := probed(); got > int64(elapsed/probeEvery)+5 {
+				t.Errorf("%s called %d times in %s, want at most %d at a %s interval",
+					probedMethod, got, elapsed, int64(elapsed/probeEvery)+5, probeEvery)
+			}
+			if got := skipped(); got != 0 {
+				t.Errorf("%s called %d times in %s mode, want 0", skippedMethod, got, tc.mode)
+			}
+		})
+	}
+}
+
+func TestRunReadinessDoesNotProbeFasterWhenNotReady(t *testing.T) {
+	st := &probeStore{err: errors.New("query log table unreachable")}
+	s := newReadinessServer(st, config.Readiness{
+		Mode:         config.ReadinessConnection,
+		Interval:     time.Millisecond,
+		FailInterval: 5 * time.Second,
+		Timeout:      time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.RunReadiness(ctx)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	got := st.connectionCount()
+	cancel()
+	<-done
+
+	if got != 1 {
+		t.Fatalf("Validate called %d times in 200ms while not ready, want 1 with a 5s fail interval", got)
+	}
 }
 
 func TestSecurityHeaders(t *testing.T) {

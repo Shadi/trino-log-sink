@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	defaultListLimit = 100
-	maxListLimit     = 5000
+	defaultListLimit          = 100
+	maxListLimit              = 5000
+	optimizeFileSizeThreshold = "64MB"
 )
 
 type TrinoStore struct {
@@ -35,7 +36,7 @@ type TrinoStore struct {
 
 var summaryColumns = []string{
 	"query_id", "create_time", "execution_start_time", "user_name", "source",
-	"catalog", "query_state", "query_type", "query_text", "wall_ms", "cpu_ms",
+	"catalog", "query_state", "query_type", "query_preview", "wall_ms", "cpu_ms",
 	"physical_input_bytes", "peak_user_memory_bytes", "output_rows",
 	"processed_input_rows", "error_code",
 }
@@ -111,10 +112,6 @@ func (s *TrinoStore) buildStatements() {
 	summary := make([]string, len(summaryColumns))
 	for i, name := range summaryColumns {
 		q := quoteIdent(name)
-		if name == "query_text" {
-			summary[i] = "substr(COALESCE(" + q + ", ''), 1, 200)"
-			continue
-		}
 		summary[i] = coalesced(byName[name], q)
 	}
 	s.summarySelect = "SELECT " + strings.Join(summary, ", ") + " FROM " + s.table
@@ -132,6 +129,14 @@ func coalesced(c column, quoted string) string {
 }
 
 func (s *TrinoStore) Validate(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, "SELECT 1")
+	if err != nil {
+		return fmt.Errorf("trino not reachable: %w", err)
+	}
+	return rows.Close()
+}
+
+func (s *TrinoStore) ValidateTable(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, "SELECT 1 FROM "+s.table+" WHERE false")
 	if err != nil {
 		return fmt.Errorf("query log table %s not reachable; apply the DDL (init subcommand or ddl/trino_query_log.sql): %w", s.table, err)
@@ -162,7 +167,26 @@ const (
 // of burning retries.
 var ErrNonRetryable = errors.New("non-retryable")
 
-func (s *TrinoStore) InsertBatch(ctx context.Context, rows []Row) error {
+type PartialCommitError struct {
+	Committed int
+	Err       error
+}
+
+func (e *PartialCommitError) Error() string {
+	return fmt.Sprintf("%d rows committed before failure: %v", e.Committed, e.Err)
+}
+
+func (e *PartialCommitError) Unwrap() error { return e.Err }
+
+func CommittedRows(err error) int {
+	var pce *PartialCommitError
+	if errors.As(err, &pce) {
+		return pce.Committed
+	}
+	return 0
+}
+
+func (s *TrinoStore) SplitBatch(rows []Row) [][]Row {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -171,10 +195,19 @@ func (s *TrinoStore) InsertBatch(ctx context.Context, rows []Row) error {
 	for i, r := range rows {
 		clamped[i] = s.clampRow(r, budget)
 	}
-	for _, chunk := range chunkRows(clamped, budget, s.estimateRowBytes) {
+	return chunkRows(clamped, budget, s.estimateRowBytes)
+}
+
+func (s *TrinoStore) InsertBatch(ctx context.Context, rows []Row) error {
+	committed := 0
+	for _, chunk := range s.SplitBatch(rows) {
 		if err := s.insertChunk(ctx, chunk); err != nil {
+			if committed > 0 {
+				return &PartialCommitError{Committed: committed, Err: err}
+			}
 			return err
 		}
+		committed += len(chunk)
 	}
 	return nil
 }
@@ -406,7 +439,8 @@ func (s *TrinoStore) Prune(ctx context.Context, olderThan time.Time) error {
 
 func (s *TrinoStore) Optimize(ctx context.Context, since time.Time) error {
 	lit := since.UTC().Format("2006-01-02 15:04:05.000")
-	stmt := "ALTER TABLE " + s.table + " EXECUTE optimize WHERE " + quoteIdent("create_time") + " >= TIMESTAMP '" + lit + " UTC'"
+	stmt := "ALTER TABLE " + s.table + " EXECUTE optimize(file_size_threshold => '" + optimizeFileSizeThreshold + "')" +
+		" WHERE " + quoteIdent("create_time") + " >= TIMESTAMP '" + lit + " UTC'"
 	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("optimize since %s: %w", lit, err)
 	}
@@ -454,9 +488,14 @@ func (s *TrinoStore) TableDDL() string {
 	for i, c := range schemaColumns {
 		cols[i] = "  " + quoteIdent(c.name) + " " + c.sqlType
 	}
+	props := []string{
+		"partitioning = ARRAY['day(create_time)']",
+		"sorted_by = ARRAY['create_time']",
+		"extra_properties = MAP(ARRAY['write.metadata.delete-after-commit.enabled'], ARRAY['true'])",
+	}
 	return "CREATE TABLE IF NOT EXISTS " + s.table + " (\n" +
 		strings.Join(cols, ",\n") +
-		"\n) WITH (\n  partitioning = ARRAY['day(create_time)']\n)"
+		"\n) WITH (\n  " + strings.Join(props, ",\n  ") + "\n)"
 }
 
 func (s *TrinoStore) DDLScript(location string) string {

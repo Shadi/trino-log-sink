@@ -37,7 +37,10 @@ func TestDDLScript(t *testing.T) {
 		`CREATE TABLE IF NOT EXISTS "gravitino"."observability"."trino_query_log"`,
 		`"create_time" timestamp(6) with time zone`,
 		`"wall_ms" bigint`,
+		`"query_preview" varchar`,
 		`partitioning = ARRAY['day(create_time)']`,
+		`sorted_by = ARRAY['create_time']`,
+		`extra_properties = MAP(ARRAY['write.metadata.delete-after-commit.enabled'], ARRAY['true'])`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("DDL missing %q\n---\n%s", want, script)

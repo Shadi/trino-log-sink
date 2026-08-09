@@ -174,16 +174,21 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("not ready: query log table unreachable; apply the DDL (init subcommand or ddl/trino_query_log.sql)"))
+	_, _ = w.Write([]byte("not ready: trino unreachable"))
 }
 
 func (s *Server) MarkNotReady() { s.ready.Store(false) }
 
 func (s *Server) RunReadiness(ctx context.Context) {
+	readiness := s.cfg.Readiness
+	validate := s.store.Validate
+	if readiness.Mode == config.ReadinessTable {
+		validate = s.store.ValidateTable
+	}
 	check := func() {
-		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cctx, cancel := context.WithTimeout(ctx, readiness.Timeout)
 		defer cancel()
-		if err := s.store.Validate(cctx); err != nil {
+		if err := validate(cctx); err != nil {
 			if s.ready.Swap(false) {
 				s.log.Warn("readiness lost: query log table unreachable", "error", err)
 			} else {
@@ -198,14 +203,14 @@ func (s *Server) RunReadiness(ctx context.Context) {
 
 	check()
 	for {
-		d := 30 * time.Second
+		next := readiness.Interval
 		if !s.ready.Load() {
-			d = 5 * time.Second
+			next = readiness.FailInterval
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(d):
+		case <-time.After(next):
 			check()
 		}
 	}

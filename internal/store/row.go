@@ -3,7 +3,9 @@ package store
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
+	"github.com/Shadi/trino-log-sink/internal/config"
 	"github.com/Shadi/trino-log-sink/internal/event"
 )
 
@@ -73,4 +75,37 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+type PlanPolicy struct {
+	Capture string
+	MinWall time.Duration
+}
+
+func (r Row) keepsPlans(p PlanPolicy) bool {
+	switch p.Capture {
+	case config.PlanCaptureNone:
+		return false
+	case config.PlanCaptureSlowOrFailed:
+		return r.ErrorCode != "" || r.WallMS >= p.MinWall.Milliseconds()
+	default:
+		return true
+	}
+}
+
+func (r Row) ApplyPlanPolicy(p PlanPolicy) Row {
+	if !r.keepsPlans(p) {
+		r.Plan = ""
+		r.JSONPlan = ""
+	}
+	return r
+}
+
+func (r Row) WithPreview(maxBytes int) Row {
+	preview := strings.Join(strings.Fields(r.QueryText), " ")
+	if maxBytes > 0 && len(preview) > maxBytes {
+		preview = preview[:runeSafeCut(preview, maxBytes)]
+	}
+	r.QueryPreview = preview
+	return r
 }
