@@ -125,6 +125,18 @@ type Row struct {
 	Environment          string     `json:"environment"`
 }
 
+func (r *Row) scanDests() []any {
+	return []any{
+		&r.QueryID, &r.QueryState, &r.QueryType, &r.UserName, &r.Source, &r.Principal, &r.ClientTags,
+		&r.Catalog, &r.SchemaName, &r.QueryText, &r.QueryPreview, &r.UpdateType, &r.CreateTime, &r.ExecutionStartTime, &r.EndTime,
+		&r.QueuedMS, &r.AnalysisMS, &r.PlanningMS, &r.ExecutionMS, &r.WallMS, &r.CPUMS,
+		&r.PeakUserMemoryBytes, &r.PeakTotalMemoryBytes, &r.PhysicalInputBytes, &r.PhysicalInputRows,
+		&r.ProcessedInputBytes, &r.ProcessedInputRows, &r.OutputBytes, &r.OutputRows, &r.WrittenBytes, &r.WrittenRows,
+		&r.CompletedSplits, &r.ErrorCode, &r.ErrorType, &r.ErrorMessage, &r.Plan, &r.JSONPlan, &r.InputsJSON,
+		&r.ResourceGroup, &r.ServerVersion, &r.Environment,
+	}
+}
+
 func (r Row) args() []any {
 	return []any{
 		r.QueryID, r.QueryState, r.QueryType, r.UserName, r.Source, r.Principal, r.ClientTags,

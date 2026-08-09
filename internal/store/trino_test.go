@@ -27,6 +27,38 @@ func TestArgsMatchColumnCount(t *testing.T) {
 	}
 }
 
+func TestScanDestsMatchColumnCount(t *testing.T) {
+	r := Row{}
+	if len(r.scanDests()) != len(schemaColumns) {
+		t.Fatalf("Row.scanDests() has %d values but schemaColumns has %d", len(r.scanDests()), len(schemaColumns))
+	}
+}
+
+func TestScanDestsMatchArgsOrder(t *testing.T) {
+	r := Row{
+		QueryID: "id", QueryState: "state", QueryType: "type", UserName: "user", Source: "src",
+		Principal: "prin", ClientTags: "tags", Catalog: "cat", SchemaName: "schema",
+		QueryText: "text", QueryPreview: "preview", UpdateType: "update",
+		ErrorCode: "ec", ErrorType: "et", ErrorMessage: "em", Plan: "plan", JSONPlan: "jplan",
+		InputsJSON: "inputs", ResourceGroup: "rg", ServerVersion: "sv", Environment: "env",
+	}
+	args := r.args()
+	dests := r.scanDests()
+	for i := range args {
+		a, ok := args[i].(string)
+		if !ok {
+			continue
+		}
+		d, ok := dests[i].(*string)
+		if !ok {
+			t.Fatalf("position %d (%s): args has string but scanDests has %T", i, schemaColumns[i].name, dests[i])
+		}
+		if *d != a {
+			t.Fatalf("position %d (%s): args=%q scanDests=%q", i, schemaColumns[i].name, a, *d)
+		}
+	}
+}
+
 func TestDDLScript(t *testing.T) {
 	s := newTestStore(t)
 	script := s.DDLScript("gs://my-bucket/observability")

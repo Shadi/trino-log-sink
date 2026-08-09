@@ -415,15 +415,7 @@ func (s *TrinoStore) GetQuery(ctx context.Context, queryID string) (*Row, error)
 		return nil, rows.Err()
 	}
 	var r Row
-	if err := rows.Scan(
-		&r.QueryID, &r.QueryState, &r.QueryType, &r.UserName, &r.Source, &r.Principal, &r.ClientTags,
-		&r.Catalog, &r.SchemaName, &r.QueryText, &r.UpdateType, &r.CreateTime, &r.ExecutionStartTime, &r.EndTime,
-		&r.QueuedMS, &r.AnalysisMS, &r.PlanningMS, &r.ExecutionMS, &r.WallMS, &r.CPUMS,
-		&r.PeakUserMemoryBytes, &r.PeakTotalMemoryBytes, &r.PhysicalInputBytes, &r.PhysicalInputRows,
-		&r.ProcessedInputBytes, &r.ProcessedInputRows, &r.OutputBytes, &r.OutputRows, &r.WrittenBytes, &r.WrittenRows,
-		&r.CompletedSplits, &r.ErrorCode, &r.ErrorType, &r.ErrorMessage, &r.Plan, &r.JSONPlan, &r.InputsJSON,
-		&r.ResourceGroup, &r.ServerVersion, &r.Environment,
-	); err != nil {
+	if err := rows.Scan(r.scanDests()...); err != nil {
 		return nil, fmt.Errorf("scan row: %w", err)
 	}
 	return &r, nil
