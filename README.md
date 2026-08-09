@@ -21,8 +21,9 @@ The single binary has several modes (configuration always comes from the environ
 | `ingest` | Run only the ingest endpoint (write path) — for a separate ingest deployment. |
 | `ui` | Run only the read UI (read path) — for a separate, independently-scaled deployment. |
 | `init` | Apply the schema + table DDL once (needs `CREATE` privileges). |
-| `prune` | Delete rows older than `RETENTION_DAYS` (run as a CronJob). |
-| `maintain` | Compact files + expire snapshots/orphans via Iceberg procedures (CronJob). |
+| `prune` | Delete rows older than the `RETENTION_DAYS` cutoff (run as a CronJob). |
+| `optimize` | Compact the last `OPTIMIZE_DAYS` days of data files (CronJob). |
+| `maintain` | Expire snapshots + remove orphan files older than `MAINTAIN_RETENTION` (CronJob). |
 | `ddl` | Print the DDL to stdout. |
 
 `serve` is the simplest single-deployment option; `ingest` + `ui` split the write
@@ -31,13 +32,22 @@ three share the same configuration; `/healthz`, `/readyz`, and `/metrics` are
 present in every mode, `/ingest` only in `serve`/`ingest`, and the UI routes only
 in `serve`/`ui`.
 
-> **Why `maintain`?** Writing one INSERT per flush through Trino creates many
-> small Iceberg files and a snapshot per commit, and `prune`'s `DELETE` writes
-> delete-files rather than reclaiming space. The `maintain` job runs
-> [`optimize`](https://trino.io/docs/current/connector/iceberg.html#optimize) +
+> **Why `optimize` and `maintain`?** Writing one INSERT per flush through Trino
+> creates many small Iceberg files and a snapshot per commit, and `prune`'s
+> `DELETE` writes delete-files rather than reclaiming space.
+> [`optimize`](https://trino.io/docs/current/connector/iceberg.html#optimize)
+> rewrites the recent partitions into fewer, bigger files;
 > [`expire_snapshots`](https://trino.io/docs/current/connector/iceberg.html#expire-snapshots) +
-> [`remove_orphan_files`](https://trino.io/docs/current/connector/iceberg.html#remove-orphan-files) so the table stays
-> compact and storage is actually freed. Schedule it after `prune`.
+> [`remove_orphan_files`](https://trino.io/docs/current/connector/iceberg.html#remove-orphan-files)
+> (the `maintain` job) then drop the superseded snapshots and delete the files
+> nothing references, which is what actually frees storage. Run them as separate
+> CronJobs, scheduled after `prune`.
+>
+> Every live snapshot is serialized into the table's `metadata.json`, which is
+> re-read on each `loadTable`, so a long `MAINTAIN_RETENTION` on a
+> high-commit-rate table inflates both metadata size and planning time. Keep it
+> just above the longest in-flight reader (`TRINO_QUERY_TIMEOUT`) — shortening it
+> deletes no rows, it only shrinks time-travel depth.
 
 ## Endpoints
 
@@ -50,11 +60,14 @@ in `serve`/`ui`.
 - `GET /api/v1/queries` — JSON list of query summaries for programmatic use (CLI, etc.);
   same filters as the dashboard (`range`, `user`, `catalog`, `state`, `sort`, `dir`) plus
   `limit` (default 100, max 500) and `offset`. Returns
-  `{ "queries": [...], "count", "limit", "offset", "hasNext" }`.
+  `{ "queries": [...], "count", "limit", "offset", "hasNext" }`. Each summary carries
+  `queryPreview` — the truncated SQL prefix stored at ingest — not the full `queryText`.
 - `GET /api/v1/queries/{queryId}` — JSON detail for one query (all statistics, `plan`,
   `jsonPlan`, and parsed `inputs`); `404` if the id is unknown.
-- `GET /healthz` — liveness. `GET /readyz` — ready only when the table is
-  reachable. `GET /metrics` — Prometheus counters (if enabled).
+- `GET /healthz` — liveness. `GET /readyz` — reflects the last background
+  readiness probe, whose cost is set by `READINESS_MODE` (by default a bare
+  `SELECT 1` that never plans against the Iceberg table). `GET /metrics` —
+  Prometheus counters (if enabled).
 
 ## Configuration
 
@@ -75,8 +88,16 @@ in `serve`/`ui`.
 | `FLUSH_MAX_RETRIES` | `3` | Retries per failed flush before the batch is dropped. Non-retryable errors (e.g. statement too large) skip retries. |
 | `MAX_STATEMENT_BYTES` | `700000` | Size budget per INSERT statement; each flush is split into chunks under it. Keep headroom below the cluster's `query.max-length` (default 1MB). |
 | `MAX_FIELD_BYTES` | `300000` | Per-field cap applied at ingest to `query_text`, `plan`, `json_plan`, `inputs_json`, and `error_message`; oversized values are truncated with a `[truncated N bytes]` marker. All other string fields are capped at 16KB. |
-| `RETENTION_DAYS` | `7` | Used by `prune`. |
-| `MAINTAIN_RETENTION` | `7d` | Snapshot/orphan age threshold for `maintain` (Trino enforces a catalog minimum). |
+| `PLAN_CAPTURE` | `slow_or_failed` | Which events keep their `plan`/`json_plan` bodies: `all`, `slow_or_failed` (failed, or wall time ≥ `PLAN_CAPTURE_MIN_WALL`), or `none`. Plans dominate row size, so this is the main lever on written bytes and Iceberg file growth. |
+| `PLAN_CAPTURE_MIN_WALL` | `10s` | Wall-time threshold that makes a successful query "slow" enough to keep its plans under `PLAN_CAPTURE=slow_or_failed`. Ignored by the other modes. |
+| `QUERY_PREVIEW_BYTES` | `200` | Size cap for the `query_preview` column — a whitespace-collapsed prefix of `query_text` written at ingest. The dashboard and `/api/v1/queries` read the preview, so listing never scans the full SQL. |
+| `RETENTION_DAYS` | `7` | Whole UTC days of rows kept *before* today, used by `prune`; the cutoff is midnight-aligned, so `2` keeps today plus the two previous UTC days and `0` keeps today only. Manifests set `2`. |
+| `OPTIMIZE_DAYS` | `1` | Days covered by `optimize`, **including today**: `1` compacts today only, `2` also compacts yesterday. The window starts at UTC midnight. |
+| `MAINTAIN_RETENTION` | `7d` | Snapshot/orphan age threshold for `maintain`. Must be ≥ the catalog's `iceberg.expire-snapshots.min-retention` and `iceberg.remove-orphan-files.min-retention` (both default `7d`) or Trino rejects the procedure. Manifests set `6h` against a catalog lowered to `1h`/`6h`. |
+| `READINESS_MODE` | `connection` | What `/readyz` probes: `connection` runs a bare `SELECT 1`; `table` also plans a read of the query-log table, which loads its Iceberg metadata and can take tens of seconds on a large table. |
+| `READINESS_INTERVAL` | `30s` | Gap between probes while the service is ready. |
+| `READINESS_FAIL_INTERVAL` | `30s` | Gap between probes while it is not ready. |
+| `READINESS_TIMEOUT` | `10s` | Per-probe deadline; a probe that exceeds it counts as not ready. |
 | `METRICS_ENABLED` | `true` | Expose `/metrics` (Prometheus text). |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error`. |
 | `TRINO_PASSWORD` | *(empty)* | Optional [basic-auth password](https://trino.io/docs/current/security/password-file.html). |
