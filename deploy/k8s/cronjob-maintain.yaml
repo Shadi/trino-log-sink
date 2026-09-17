@@ -1,3 +1,5 @@
+# Trino/Iceberg backend only: with STORE_BACKEND=clickhouse this job exits
+# immediately without doing anything and can be removed.
 # Nightly Iceberg cleanup: expire old snapshots + remove orphan files so the
 # prune DELETEs actually reclaim object-store space. File compaction is handled
 # more frequently by the optimize CronJob. Schedule off-peak, after prune.

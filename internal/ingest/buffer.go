@@ -32,21 +32,25 @@ type Observer interface {
 	Dropped(n int)
 	Flushed(n int)
 	FlushFailed()
+	FlushNonRetryable()
 }
 
 type NopObserver struct{}
 
-func (NopObserver) Enqueued()    {}
-func (NopObserver) Dropped(int)  {}
-func (NopObserver) Flushed(int)  {}
-func (NopObserver) FlushFailed() {}
+func (NopObserver) Enqueued()          {}
+func (NopObserver) Dropped(int)        {}
+func (NopObserver) Flushed(int)        {}
+func (NopObserver) FlushFailed()       {}
+func (NopObserver) FlushNonRetryable() {}
 
 type Config struct {
-	BatchSize      int
-	FlushInterval  time.Duration
-	BufferCapacity int
-	MaxRetries     int
-	FlushTimeout   time.Duration
+	BatchSize       int
+	FlushInterval   time.Duration
+	BufferCapacity  int
+	MaxRetries      int
+	FlushTimeout    time.Duration
+	RetryBackoff    time.Duration
+	RetryMaxBackoff time.Duration
 }
 
 type Buffer struct {
@@ -79,6 +83,12 @@ func New(w Writer, cfg Config, log *slog.Logger, obs Observer) *Buffer {
 	}
 	if cfg.BufferCapacity < 1 {
 		cfg.BufferCapacity = 1
+	}
+	if cfg.RetryBackoff <= 0 {
+		cfg.RetryBackoff = 3 * time.Second
+	}
+	if cfg.RetryMaxBackoff < cfg.RetryBackoff {
+		cfg.RetryMaxBackoff = 30 * time.Second
 	}
 	b := &Buffer{
 		w:    w,
@@ -172,7 +182,7 @@ func (b *Buffer) drain(batch *[]store.Row) {
 func (b *Buffer) flush(rows []store.Row) {
 	rows = dedupe(rows)
 
-	backoff := 100 * time.Millisecond
+	backoff := b.cfg.RetryBackoff
 	for attempt := 0; attempt <= b.cfg.MaxRetries; attempt++ {
 		start := time.Now()
 		committed, err := b.insert(rows)
@@ -189,6 +199,7 @@ func (b *Buffer) flush(rows []store.Row) {
 		b.log.Error("flush failed",
 			"attempt", attempt+1, "committed", committed, "remaining", len(rows), "error", err)
 		if errors.Is(err, store.ErrNonRetryable) {
+			b.obs.FlushNonRetryable()
 			b.log.Error("non-retryable flush error, skipping retries", "rows", len(rows))
 			break
 		}
@@ -200,7 +211,7 @@ func (b *Buffer) flush(rows []store.Row) {
 			case <-time.After(backoff):
 			case <-b.stop:
 			}
-			backoff *= 2
+			backoff = min(backoff*2, b.cfg.RetryMaxBackoff)
 		}
 	}
 	b.obs.FlushFailed()

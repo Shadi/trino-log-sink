@@ -152,7 +152,7 @@ func (s *Server) listAndTrim(ctx context.Context, f store.QueryFilter, pageSize 
 func (s *Server) populateRows(ctx context.Context, v *listView, f store.QueryFilter) {
 	rows, hasNext, err := s.listAndTrim(ctx, f, uiLimit)
 	if err != nil {
-		v.Error = "query failed: " + err.Error()
+		v.Error = "query failed"
 		s.log.Error("list queries failed", "error", err)
 		return
 	}

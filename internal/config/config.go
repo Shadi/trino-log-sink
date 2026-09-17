@@ -4,10 +4,17 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	BackendTrino      = "trino"
+	BackendClickHouse = "clickhouse"
 )
 
 type Trino struct {
@@ -25,6 +32,21 @@ type Trino struct {
 	// MaxStatementBytes budgets the estimated text size of each INSERT the
 	// store sends; it must stay under the Trino cluster's query.max-length.
 	MaxStatementBytes int
+	IcebergLocation   string
+}
+
+type ClickHouse struct {
+	Addr          string
+	Database      string
+	Table         string
+	User          string
+	Password      string
+	TLS           bool
+	TLSInsecure   bool
+	TLSCA         string
+	DialTimeout   time.Duration
+	QueryTimeout  time.Duration
+	MaxBatchBytes int
 }
 
 type Cache struct {
@@ -60,15 +82,19 @@ const (
 type Config struct {
 	ListenAddr string
 
-	Trino     Trino
-	Cache     Cache
-	Readiness Readiness
+	StoreBackend string
+	Trino        Trino
+	ClickHouse   ClickHouse
+	Cache        Cache
+	Readiness    Readiness
 
-	BatchSize       int
-	FlushInterval   time.Duration
-	BufferCapacity  int
-	FlushMaxRetries int
-	MaxFieldBytes   int
+	BatchSize            int
+	FlushInterval        time.Duration
+	BufferCapacity       int
+	FlushMaxRetries      int
+	FlushRetryBackoff    time.Duration
+	FlushRetryMaxBackoff time.Duration
+	MaxFieldBytes        int
 
 	PlanCapture        string
 	PlanCaptureMinWall time.Duration
@@ -81,15 +107,18 @@ type Config struct {
 
 	MetricsEnabled bool
 	LogLevel       string
-
-	IcebergLocation string
 }
+
+const minClickHouseBatchBytes = 1 << 20
+
+var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
 func Load() (*Config, error) {
 	e := &env{}
 
 	cfg := &Config{
-		ListenAddr: e.str("LISTEN_ADDR", ":8080"),
+		ListenAddr:   e.str("LISTEN_ADDR", ":8080"),
+		StoreBackend: e.str("STORE_BACKEND", BackendTrino),
 		Trino: Trino{
 			Host:              e.str("TRINO_HOST", "trino-cluster-trino.trino"),
 			Port:              e.intVal("TRINO_PORT", 8080),
@@ -103,6 +132,20 @@ func Load() (*Config, error) {
 			SSL:               e.boolVal("TRINO_SSL", false),
 			QueryTimeout:      e.duration("TRINO_QUERY_TIMEOUT", 60*time.Second),
 			MaxStatementBytes: e.intVal("MAX_STATEMENT_BYTES", 700_000),
+			IcebergLocation:   e.str("ICEBERG_LOCATION", ""),
+		},
+		ClickHouse: ClickHouse{
+			Addr:          e.str("CLICKHOUSE_ADDR", ""),
+			Database:      e.str("CLICKHOUSE_DATABASE", "observability"),
+			Table:         e.str("CLICKHOUSE_TABLE", "trino_query_log"),
+			User:          e.str("CLICKHOUSE_USER", "default"),
+			Password:      e.str("CLICKHOUSE_PASSWORD", ""),
+			TLS:           e.boolVal("CLICKHOUSE_TLS", false),
+			TLSInsecure:   e.boolVal("CLICKHOUSE_TLS_INSECURE", false),
+			TLSCA:         e.str("CLICKHOUSE_TLS_CA", ""),
+			DialTimeout:   e.duration("CLICKHOUSE_DIAL_TIMEOUT", 5*time.Second),
+			QueryTimeout:  e.duration("CLICKHOUSE_QUERY_TIMEOUT", 60*time.Second),
+			MaxBatchBytes: e.intVal("CLICKHOUSE_MAX_BATCH_BYTES", 8<<20),
 		},
 		Cache: Cache{
 			Addr:     e.str("REDIS_ADDR", ""),
@@ -119,26 +162,41 @@ func Load() (*Config, error) {
 			FailInterval: e.duration("READINESS_FAIL_INTERVAL", 30*time.Second),
 			Timeout:      e.duration("READINESS_TIMEOUT", 10*time.Second),
 		},
-		BatchSize:          e.intVal("BATCH_SIZE", 100),
-		FlushInterval:      e.duration("FLUSH_INTERVAL", 5*time.Second),
-		BufferCapacity:     e.intVal("BUFFER_CAPACITY", 10000),
-		FlushMaxRetries:    e.intVal("FLUSH_MAX_RETRIES", 3),
-		MaxFieldBytes:      e.intVal("MAX_FIELD_BYTES", 300_000),
-		PlanCapture:        e.str("PLAN_CAPTURE", PlanCaptureSlowOrFailed),
-		PlanCaptureMinWall: e.duration("PLAN_CAPTURE_MIN_WALL", 10*time.Second),
-		PreviewBytes:       e.intVal("QUERY_PREVIEW_BYTES", 200),
-		RetentionDays:      e.intVal("RETENTION_DAYS", 7),
-		MaintainRetention:  e.str("MAINTAIN_RETENTION", "7d"),
-		OptimizeDays:       e.intVal("OPTIMIZE_DAYS", 1),
-		MetricsEnabled:     e.boolVal("METRICS_ENABLED", true),
-		LogLevel:           e.str("LOG_LEVEL", "info"),
-		IcebergLocation:    e.str("ICEBERG_LOCATION", ""),
+		BatchSize:            e.intVal("BATCH_SIZE", 100),
+		FlushInterval:        e.duration("FLUSH_INTERVAL", 5*time.Second),
+		BufferCapacity:       e.intVal("BUFFER_CAPACITY", 10000),
+		FlushMaxRetries:      e.intVal("FLUSH_MAX_RETRIES", 3),
+		FlushRetryBackoff:    e.duration("FLUSH_RETRY_BACKOFF", time.Second),
+		FlushRetryMaxBackoff: e.duration("FLUSH_RETRY_MAX_BACKOFF", 30*time.Second),
+		MaxFieldBytes:        e.intVal("MAX_FIELD_BYTES", 300_000),
+		PlanCapture:          e.str("PLAN_CAPTURE", PlanCaptureSlowOrFailed),
+		PlanCaptureMinWall:   e.duration("PLAN_CAPTURE_MIN_WALL", 10*time.Second),
+		PreviewBytes:         e.intVal("QUERY_PREVIEW_BYTES", 200),
+		RetentionDays:        e.intVal("RETENTION_DAYS", 7),
+		MaintainRetention:    e.str("MAINTAIN_RETENTION", "7d"),
+		OptimizeDays:         e.intVal("OPTIMIZE_DAYS", 1),
+		MetricsEnabled:       e.boolVal("METRICS_ENABLED", true),
+		LogLevel:             e.str("LOG_LEVEL", "info"),
 	}
 
 	if err := errors.Join(append(e.errs, cfg.validate()...)...); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func (c *Config) StoreQueryTimeout() time.Duration {
+	if c.StoreBackend == BackendClickHouse {
+		return c.ClickHouse.QueryTimeout
+	}
+	return c.Trino.QueryTimeout
+}
+
+func (c *Config) StoreTarget() string {
+	if c.StoreBackend == BackendClickHouse {
+		return fmt.Sprintf("clickhouse://%s/%s.%s", c.ClickHouse.Addr, c.ClickHouse.Database, c.ClickHouse.Table)
+	}
+	return fmt.Sprintf("trino://%s:%d/%s.%s.%s", c.Trino.Host, c.Trino.Port, c.Trino.Catalog, c.Trino.Schema, c.Trino.Table)
 }
 
 func (c *Config) validate() []error {
@@ -160,6 +218,8 @@ func (c *Config) validate() []error {
 	add(c.FlushInterval <= 0, "FLUSH_INTERVAL must be > 0")
 	add(c.BufferCapacity < 1, "BUFFER_CAPACITY must be >= 1")
 	add(c.FlushMaxRetries < 0, "FLUSH_MAX_RETRIES must be >= 0")
+	add(c.FlushRetryBackoff <= 0, "FLUSH_RETRY_BACKOFF must be > 0")
+	add(c.FlushRetryMaxBackoff < c.FlushRetryBackoff, "FLUSH_RETRY_MAX_BACKOFF must be >= FLUSH_RETRY_BACKOFF")
 	add(c.Trino.MaxStatementBytes < 16384, "MAX_STATEMENT_BYTES must be >= 16384")
 	add(c.MaxFieldBytes < 1024, "MAX_FIELD_BYTES must be >= 1024")
 	add(c.RetentionDays < 0, "RETENTION_DAYS must be >= 0")
@@ -169,6 +229,23 @@ func (c *Config) validate() []error {
 	add(c.Readiness.Timeout <= 0, "READINESS_TIMEOUT must be > 0")
 	add(c.PlanCaptureMinWall < 0, "PLAN_CAPTURE_MIN_WALL must be >= 0")
 	add(c.PreviewBytes < 1, "QUERY_PREVIEW_BYTES must be >= 1")
+
+	switch c.StoreBackend {
+	case BackendTrino:
+	case BackendClickHouse:
+		ch := c.ClickHouse
+		add(!validHostPort(ch.Addr), "CLICKHOUSE_ADDR must be set to host:port when STORE_BACKEND=clickhouse")
+		add(!identifierPattern.MatchString(ch.Database), "CLICKHOUSE_DATABASE must be a plain identifier (letters, digits, underscore)")
+		add(!identifierPattern.MatchString(ch.Table), "CLICKHOUSE_TABLE must be a plain identifier (letters, digits, underscore)")
+		add(ch.User == "", "CLICKHOUSE_USER must not be empty")
+		add(ch.DialTimeout <= 0, "CLICKHOUSE_DIAL_TIMEOUT must be > 0")
+		add(ch.QueryTimeout <= 0, "CLICKHOUSE_QUERY_TIMEOUT must be > 0")
+		add(ch.MaxBatchBytes < minClickHouseBatchBytes, "CLICKHOUSE_MAX_BATCH_BYTES must be >= 1048576")
+		add(ch.TLSInsecure && !ch.TLS, "CLICKHOUSE_TLS_INSECURE requires CLICKHOUSE_TLS=true")
+		add(ch.TLSCA != "" && !ch.TLS, "CLICKHOUSE_TLS_CA requires CLICKHOUSE_TLS=true")
+	default:
+		add(true, "STORE_BACKEND must be one of trino, clickhouse")
+	}
 
 	switch c.Readiness.Mode {
 	case ReadinessConnection, ReadinessTable:
@@ -195,6 +272,15 @@ func (c *Config) validate() []error {
 		add(true, "LOG_LEVEL must be one of debug, info, warn, error")
 	}
 	return errs
+}
+
+func validHostPort(addr string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 type env struct {

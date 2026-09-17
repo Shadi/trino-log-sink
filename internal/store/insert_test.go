@@ -24,10 +24,11 @@ type execRecord struct {
 // every ExecContext call. errAt is a 0-based exec index that returns err
 // instead of succeeding; -1 disables failures.
 type fakeConnector struct {
-	mu    sync.Mutex
-	execs []execRecord
-	errAt int
-	err   error
+	mu      sync.Mutex
+	execs   []execRecord
+	queries []queryRecord
+	errAt   int
+	err     error
 }
 
 func (c *fakeConnector) Connect(context.Context) (driver.Conn, error) { return &fakeConn{c: c}, nil }

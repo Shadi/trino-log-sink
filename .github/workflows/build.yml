@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -11,6 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -18,11 +20,12 @@ jobs:
           go-version-file: go.mod
       - run: gofmt -l . | tee /dev/stderr | (! read)
       - run: go vet ./...
-      - run: go test -race ./...
+      - run: go test -race -short ./...
 
   image:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write

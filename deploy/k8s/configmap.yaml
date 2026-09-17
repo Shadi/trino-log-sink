@@ -7,6 +7,12 @@ metadata:
     app.kubernetes.io/name: trino-query-log-sink
 data:
   LISTEN_ADDR: ":8080"
+  STORE_BACKEND: "trino"
+  # For STORE_BACKEND=clickhouse also set (password goes in the Secret):
+  # CLICKHOUSE_ADDR: "clickhouse.trino:9000"
+  # CLICKHOUSE_DATABASE: "observability"
+  # CLICKHOUSE_USER: "trino-query-log"
+  # READINESS_MODE: "table"
   TRINO_HOST: "trino-cluster-trino.trino"
   TRINO_PORT: "8080"
   TRINO_USER: "trino-query-log"

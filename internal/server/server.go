@@ -174,7 +174,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("not ready: trino unreachable"))
+	_, _ = w.Write([]byte("not ready: store unreachable"))
 }
 
 func (s *Server) MarkNotReady() { s.ready.Store(false) }

@@ -50,12 +50,13 @@ func (f *fakeWriter) snapshot() [][]store.Row {
 	return append([][]store.Row(nil), f.batches...)
 }
 
-type fakeObs struct{ enq, drop, flushed, failed atomic.Int64 }
+type fakeObs struct{ enq, drop, flushed, failed, nonRetryable atomic.Int64 }
 
-func (o *fakeObs) Enqueued()     { o.enq.Add(1) }
-func (o *fakeObs) Dropped(n int) { o.drop.Add(int64(n)) }
-func (o *fakeObs) Flushed(n int) { o.flushed.Add(int64(n)) }
-func (o *fakeObs) FlushFailed()  { o.failed.Add(1) }
+func (o *fakeObs) Enqueued()          { o.enq.Add(1) }
+func (o *fakeObs) Dropped(n int)      { o.drop.Add(int64(n)) }
+func (o *fakeObs) Flushed(n int)      { o.flushed.Add(int64(n)) }
+func (o *fakeObs) FlushFailed()       { o.failed.Add(1) }
+func (o *fakeObs) FlushNonRetryable() { o.nonRetryable.Add(1) }
 
 func row(id string) store.Row { return store.Row{QueryID: id} }
 
@@ -137,7 +138,7 @@ func TestGracefulCloseDrains(t *testing.T) {
 func TestRetryThenSucceed(t *testing.T) {
 	w := &fakeWriter{failTimes: 2}
 	obs := &fakeObs{}
-	b := New(w, Config{BatchSize: 1, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3}, nil, obs)
+	b := New(w, Config{BatchSize: 1, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3, RetryBackoff: time.Millisecond}, nil, obs)
 	defer b.Close(context.Background())
 
 	b.Add(row("a"))
@@ -153,7 +154,7 @@ func TestRetryThenSucceed(t *testing.T) {
 func TestDropCountOnExhaustedRetries(t *testing.T) {
 	w := &fakeWriter{failTimes: 10}
 	obs := &fakeObs{}
-	b := New(w, Config{BatchSize: 2, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 1}, nil, obs)
+	b := New(w, Config{BatchSize: 2, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 1, RetryBackoff: time.Millisecond}, nil, obs)
 	defer b.Close(context.Background())
 
 	b.Add(row("a"))
@@ -167,7 +168,7 @@ func TestDropCountOnExhaustedRetries(t *testing.T) {
 func TestNonRetryableSkipsRetries(t *testing.T) {
 	w := &fakeWriter{failTimes: 100, err: fmt.Errorf("insert 1 rows: %w", store.ErrNonRetryable)}
 	obs := &fakeObs{}
-	b := New(w, Config{BatchSize: 1, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3}, nil, obs)
+	b := New(w, Config{BatchSize: 1, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3, RetryBackoff: time.Millisecond}, nil, obs)
 	defer b.Close(context.Background())
 
 	b.Add(row("a"))
@@ -280,7 +281,7 @@ func addAll(b *Buffer, list []string) {
 func TestRetryAfterPartialCommitReplaysOnlyRemainder(t *testing.T) {
 	w := &partialWriter{failsLeft: 1, commitOnFail: 2}
 	obs := &fakeObs{}
-	b := New(w, Config{BatchSize: 5, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3}, nil, obs)
+	b := New(w, Config{BatchSize: 5, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3, RetryBackoff: time.Millisecond}, nil, obs)
 	defer b.Close(context.Background())
 
 	want := ids("q", 5)
@@ -303,7 +304,7 @@ func TestRetryAfterPartialCommitReplaysOnlyRemainder(t *testing.T) {
 func TestRetryReplaysOnlyUncommittedChunks(t *testing.T) {
 	w := &chunkedWriter{chunkSize: 2, failAt: 2}
 	obs := &fakeObs{}
-	b := New(w, Config{BatchSize: 6, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3}, nil, obs)
+	b := New(w, Config{BatchSize: 6, FlushInterval: time.Hour, BufferCapacity: 10, MaxRetries: 3, RetryBackoff: time.Millisecond}, nil, obs)
 	defer b.Close(context.Background())
 
 	want := ids("q", 6)

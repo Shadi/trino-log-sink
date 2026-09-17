@@ -14,11 +14,7 @@ import (
 	"github.com/trinodb/trino-go-client/trino"
 )
 
-const (
-	defaultListLimit          = 100
-	maxListLimit              = 5000
-	optimizeFileSizeThreshold = "64MB"
-)
+const optimizeFileSizeThreshold = "64MB"
 
 type TrinoStore struct {
 	db  *sql.DB
@@ -41,7 +37,7 @@ var summaryColumns = []string{
 	"processed_input_rows", "error_code",
 }
 
-func New(cfg config.Trino) (*TrinoStore, error) {
+func NewTrino(cfg config.Trino) (*TrinoStore, error) {
 	scheme := "http"
 	if cfg.SSL {
 		scheme = "https"
@@ -147,44 +143,15 @@ func (s *TrinoStore) ValidateTable(ctx context.Context) error {
 // The driver runs with DisableExplicitPrepare, so every statement ships as
 // EXECUTE IMMEDIATE '<insert text>' USING <args serialized to SQL literals> —
 // one string whose size must stay under the cluster's query.max-length. The
-// constants below upper-bound the serialized size of each arg (including its
-// " USING "-list separator) so batches can be split before the server rejects
-// them.
+// per-arg bounds live in chunk.go; the constants below cover the statement
+// framing.
 const (
 	defaultMaxStatementBytes = 700_000
 	minStatementBudget       = 4096
 	clampMaxIterations       = 1000
 
 	executeImmediateOverhead = 27 // "EXECUTE IMMEDIATE '" + closing "'" + " USING "
-	stringArgOverhead        = 4  // two quotes + ", " separator
-	nullArgBytes             = 6  // "NULL" + separator
-	numericArgBytes          = 24 // int64 decimal (<= 20 chars) + separator
-	timestampArgBytes        = 64 // "TIMESTAMP '...'" (<= 50 bytes) + separator
 )
-
-// ErrNonRetryable marks insert failures that are deterministic — replaying the
-// same statement can never succeed, so callers should drop the batch instead
-// of burning retries.
-var ErrNonRetryable = errors.New("non-retryable")
-
-type PartialCommitError struct {
-	Committed int
-	Err       error
-}
-
-func (e *PartialCommitError) Error() string {
-	return fmt.Sprintf("%d rows committed before failure: %v", e.Committed, e.Err)
-}
-
-func (e *PartialCommitError) Unwrap() error { return e.Err }
-
-func CommittedRows(err error) int {
-	var pce *PartialCommitError
-	if errors.As(err, &pce) {
-		return pce.Committed
-	}
-	return 0
-}
 
 func (s *TrinoStore) SplitBatch(rows []Row) [][]Row {
 	if len(rows) == 0 {
@@ -238,51 +205,12 @@ func classifyInsertErr(err error) error {
 	return err
 }
 
-// estimateArgBytes upper-bounds the bytes the driver's Serial adds to the
-// statement for one arg. Strings gain one byte per embedded single quote
-// (quote doubling).
-func estimateArgBytes(a any) int {
-	switch v := a.(type) {
-	case string:
-		return len(v) + strings.Count(v, "'") + stringArgOverhead
-	case nil:
-		return nullArgBytes
-	case time.Time:
-		return timestampArgBytes
-	default:
-		return numericArgBytes
-	}
-}
-
 func (s *TrinoStore) estimateRowBytes(r Row) int {
 	n := len(s.rowPlaceholder) + 2 // placeholder group + ", " between groups
 	for _, a := range r.args() {
 		n += estimateArgBytes(a)
 	}
 	return n
-}
-
-// chunkRows greedily packs rows into chunks whose estimated sizes sum to at
-// most budget. Order is preserved and chunks are never empty; a single row
-// estimated above budget becomes its own chunk (rows are clamped beforehand,
-// so that only happens when the fixed per-row overhead exceeds the budget).
-func chunkRows(rows []Row, budget int, estimate func(Row) int) [][]Row {
-	var chunks [][]Row
-	var cur []Row
-	size := 0
-	for _, r := range rows {
-		n := estimate(r)
-		if len(cur) > 0 && size+n > budget {
-			chunks = append(chunks, cur)
-			cur, size = nil, 0
-		}
-		cur = append(cur, r)
-		size += n
-	}
-	if len(cur) > 0 {
-		chunks = append(chunks, cur)
-	}
-	return chunks
 }
 
 // clampRow guarantees a single row's estimated statement contribution fits the
@@ -315,64 +243,18 @@ func (s *TrinoStore) clampRow(r Row, budget int) Row {
 }
 
 func (s *TrinoStore) ListQueries(ctx context.Context, f QueryFilter) ([]QuerySummary, error) {
-	var where []string
-	var args []any
-	if !f.Since.IsZero() {
-		where = append(where, quoteIdent("create_time")+" >= ?")
-		args = append(args, f.Since)
-	}
-	if !f.Until.IsZero() {
-		where = append(where, quoteIdent("create_time")+" < ?")
-		args = append(args, f.Until)
-	}
-	if f.User != "" {
-		where = append(where, quoteIdent("user_name")+" = ?")
-		args = append(args, f.User)
-	}
-	if f.Catalog != "" {
-		where = append(where, quoteIdent("catalog")+" = ?")
-		args = append(args, f.Catalog)
-	}
-	if f.State != "" {
-		where = append(where, quoteIdent("query_state")+" = ?")
-		args = append(args, f.State)
-	}
-
-	sortCol, ok := sortColumns[f.Sort]
-	if !ok {
-		sortCol = "create_time"
-	}
-	dir := "ASC"
-	if f.Desc {
-		dir = "DESC"
-	}
-	limit := f.Limit
-	if limit <= 0 || limit > maxListLimit {
-		limit = defaultListLimit
-	}
-
 	var sb strings.Builder
 	sb.WriteString(s.summarySelect)
-	if len(where) > 0 {
-		sb.WriteString(" WHERE ")
-		sb.WriteString(strings.Join(where, " AND "))
-	}
+	where, args := trinoWhere(listPredicates(f))
+	sb.WriteString(where)
 	sb.WriteString(" ORDER BY ")
-	sb.WriteString(quoteIdent(sortCol))
-	sb.WriteString(" ")
-	sb.WriteString(dir)
-	if sortCol != "query_id" {
-		sb.WriteString(", ")
-		sb.WriteString(quoteIdent("query_id"))
-		sb.WriteString(" ")
-		sb.WriteString(dir)
-	}
+	sb.WriteString(orderBy(f))
 	if f.Offset > 0 {
 		sb.WriteString(" OFFSET ")
 		sb.WriteString(strconv.Itoa(f.Offset))
 	}
 	sb.WriteString(" LIMIT ")
-	sb.WriteString(strconv.Itoa(limit))
+	sb.WriteString(strconv.Itoa(pageLimit(f)))
 
 	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
 	if err != nil {
@@ -383,11 +265,7 @@ func (s *TrinoStore) ListQueries(ctx context.Context, f QueryFilter) ([]QuerySum
 	var out []QuerySummary
 	for rows.Next() {
 		var q QuerySummary
-		if err := rows.Scan(
-			&q.QueryID, &q.CreateTime, &q.ExecutionStartTime, &q.UserName, &q.Source,
-			&q.Catalog, &q.QueryState, &q.QueryType, &q.QueryPreview, &q.WallMS, &q.CPUMS,
-			&q.PhysicalInputBytes, &q.PeakUserMemoryBytes, &q.OutputRows, &q.ProcessedInputRows, &q.ErrorCode,
-		); err != nil {
+		if err := rows.Scan(q.scanDests()...); err != nil {
 			return nil, fmt.Errorf("scan summary: %w", err)
 		}
 		out = append(out, q)
@@ -396,15 +274,12 @@ func (s *TrinoStore) ListQueries(ctx context.Context, f QueryFilter) ([]QuerySum
 }
 
 func (s *TrinoStore) GetQuery(ctx context.Context, queryID string) (*Row, error) {
-	day, ok := queryIDDay(queryID)
+	preds, ok := queryIDPredicates(queryID)
 	if !ok {
 		return nil, nil
 	}
-	where := quoteIdent("query_id") + " = ? AND " +
-		quoteIdent("create_time") + " >= ? AND " + quoteIdent("create_time") + " < ?"
-	args := []any{queryID, day.AddDate(0, 0, -1), day.AddDate(0, 0, 2)}
-
-	stmt := "SELECT " + s.rowSelectList + " FROM " + s.table + " WHERE " + where + " LIMIT 1"
+	where, args := trinoWhere(preds)
+	stmt := "SELECT " + s.rowSelectList + " FROM " + s.table + where + " LIMIT 1"
 	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get query %s: %w", queryID, err)
@@ -419,6 +294,19 @@ func (s *TrinoStore) GetQuery(ctx context.Context, queryID string) (*Row, error)
 		return nil, fmt.Errorf("scan row: %w", err)
 	}
 	return &r, nil
+}
+
+func trinoWhere(preds []predicate) (string, []any) {
+	if len(preds) == 0 {
+		return "", nil
+	}
+	parts := make([]string, len(preds))
+	args := make([]any, len(preds))
+	for i, p := range preds {
+		parts[i] = quoteIdent(p.column) + " " + p.op + " ?"
+		args[i] = p.value
+	}
+	return " WHERE " + strings.Join(parts, " AND "), args
 }
 
 func (s *TrinoStore) Prune(ctx context.Context, olderThan time.Time) error {
@@ -457,8 +345,8 @@ func (s *TrinoStore) Maintain(ctx context.Context, retentionThreshold string) er
 	return errors.Join(errs...)
 }
 
-func (s *TrinoStore) Init(ctx context.Context, location string) error {
-	if _, err := s.db.ExecContext(ctx, s.SchemaDDL(location)); err != nil {
+func (s *TrinoStore) Init(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, s.SchemaDDL()); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, s.TableDDL()); err != nil {
@@ -467,10 +355,10 @@ func (s *TrinoStore) Init(ctx context.Context, location string) error {
 	return nil
 }
 
-func (s *TrinoStore) SchemaDDL(location string) string {
+func (s *TrinoStore) SchemaDDL() string {
 	stmt := "CREATE SCHEMA IF NOT EXISTS " + quoteIdent(s.cfg.Catalog) + "." + quoteIdent(s.cfg.Schema)
-	if location != "" {
-		stmt += " WITH (location = '" + strings.ReplaceAll(location, "'", "''") + "')"
+	if s.cfg.IcebergLocation != "" {
+		stmt += " WITH (location = '" + strings.ReplaceAll(s.cfg.IcebergLocation, "'", "''") + "')"
 	}
 	return stmt
 }
@@ -490,8 +378,8 @@ func (s *TrinoStore) TableDDL() string {
 		"\n) WITH (\n  " + strings.Join(props, ",\n  ") + "\n)"
 }
 
-func (s *TrinoStore) DDLScript(location string) string {
-	return s.SchemaDDL(location) + ";\n\n" + s.TableDDL() + ";\n"
+func (s *TrinoStore) DDLScript() string {
+	return s.SchemaDDL() + ";\n\n" + s.TableDDL() + ";\n"
 }
 
 func (s *TrinoStore) Close() error {

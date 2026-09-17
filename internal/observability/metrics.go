@@ -22,6 +22,7 @@ type Metrics struct {
 	batchesFlushed   atomic.Int64
 	rowsFlushed      atomic.Int64
 	flushFailures    atomic.Int64
+	flushNonRetry    atomic.Int64
 
 	cacheHits   atomic.Int64
 	cacheMisses atomic.Int64
@@ -38,10 +39,11 @@ func (m *Metrics) ReceivedEvent()   { m.eventsReceived.Add(1) }
 func (m *Metrics) InvalidEvent()    { m.eventsInvalid.Add(1) }
 func (m *Metrics) SuppressedEvent() { m.eventsSuppressed.Add(1) }
 
-func (m *Metrics) Enqueued()     { m.rowsEnqueued.Add(1) }
-func (m *Metrics) Dropped(n int) { m.eventsDropped.Add(int64(n)) }
-func (m *Metrics) Flushed(n int) { m.batchesFlushed.Add(1); m.rowsFlushed.Add(int64(n)) }
-func (m *Metrics) FlushFailed()  { m.flushFailures.Add(1) }
+func (m *Metrics) Enqueued()          { m.rowsEnqueued.Add(1) }
+func (m *Metrics) Dropped(n int)      { m.eventsDropped.Add(int64(n)) }
+func (m *Metrics) Flushed(n int)      { m.batchesFlushed.Add(1); m.rowsFlushed.Add(int64(n)) }
+func (m *Metrics) FlushFailed()       { m.flushFailures.Add(1) }
+func (m *Metrics) FlushNonRetryable() { m.flushNonRetry.Add(1) }
 
 func (m *Metrics) CacheHit()   { m.cacheHits.Add(1) }
 func (m *Metrics) CacheMiss()  { m.cacheMisses.Add(1) }
@@ -61,9 +63,10 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		{"events_suppressed_total", "Events dropped because their source matched this service.", m.eventsSuppressed.Load()},
 		{"rows_enqueued_total", "Rows accepted into the in-memory buffer.", m.rowsEnqueued.Load()},
 		{"events_dropped_total", "Rows dropped: buffer full or closing, or batch abandoned after flush failures.", m.eventsDropped.Load()},
-		{"batches_flushed_total", "Batches successfully written to Trino.", m.batchesFlushed.Load()},
-		{"rows_flushed_total", "Rows successfully written to Trino.", m.rowsFlushed.Load()},
-		{"flush_failures_total", "Batches dropped after exhausting flush retries.", m.flushFailures.Load()},
+		{"batches_flushed_total", "Batches successfully written to the store.", m.batchesFlushed.Load()},
+		{"rows_flushed_total", "Rows successfully written to the store.", m.rowsFlushed.Load()},
+		{"flush_failures_total", "Batches dropped after a flush failure (retries exhausted or non-retryable).", m.flushFailures.Load()},
+		{"flush_non_retryable_total", "Batches dropped without retrying because the store reported a deterministic error (missing table, auth failure, schema mismatch).", m.flushNonRetry.Load()},
 		{"cache_hits_total", "Read-through cache hits.", m.cacheHits.Load()},
 		{"cache_misses_total", "Read-through cache misses.", m.cacheMisses.Load()},
 		{"cache_errors_total", "Read-through cache backend or decode errors.", m.cacheErrors.Load()},

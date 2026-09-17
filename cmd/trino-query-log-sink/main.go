@@ -1,5 +1,6 @@
 // Command trino-query-log-sink ingests Trino QueryCompletedEvents, persists
-// them to an Iceberg table through Trino, and serves a browse UI.
+// them to the configured store (an Iceberg table through Trino, or ClickHouse),
+// and serves a browse UI.
 //
 // Subcommands:
 //
@@ -60,6 +61,7 @@ func run() error {
 	}
 	log := observability.NewLogger(cfg.LogLevel)
 	slog.SetDefault(log)
+	warnInsecureStore(cfg, log)
 
 	switch cmd {
 	case "serve":
@@ -97,9 +99,27 @@ func usage() {
   ddl       print the DDL to stdout
   query     query a running instance's JSON API (list/get/plan)
 
-Configuration is read from environment variables (see README).
+Configuration is read from environment variables (see README); STORE_BACKEND
+selects the store (trino or clickhouse). optimize and maintain only apply to
+the trino backend.
 Run 'query -h' for the client subcommands (they take --url, not env config).
 `)
+}
+
+func openStore(cfg *config.Config) (store.Backend, error) {
+	return store.Open(cfg.StoreBackend, cfg.Trino, cfg.ClickHouse)
+}
+
+func warnInsecureStore(cfg *config.Config, log *slog.Logger) {
+	if cfg.StoreBackend != config.BackendClickHouse {
+		return
+	}
+	if cfg.ClickHouse.Password != "" && !cfg.ClickHouse.TLS {
+		log.Warn("CLICKHOUSE_PASSWORD is set but CLICKHOUSE_TLS is off; credentials travel in cleartext")
+	}
+	if cfg.ClickHouse.TLS && cfg.ClickHouse.TLSInsecure {
+		log.Warn("CLICKHOUSE_TLS_INSECURE is on; the server certificate is not verified")
+	}
 }
 
 func serve(cfg *config.Config, log *slog.Logger) error {
@@ -115,7 +135,7 @@ func runUI(cfg *config.Config, log *slog.Logger) error {
 }
 
 func runServer(cfg *config.Config, log *slog.Logger, opts server.Options) error {
-	st, err := store.New(cfg.Trino)
+	st, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -126,11 +146,13 @@ func runServer(cfg *config.Config, log *slog.Logger, opts server.Options) error 
 	var buf *ingest.Buffer
 	if opts.Ingest {
 		buf = ingest.New(st, ingest.Config{
-			BatchSize:      cfg.BatchSize,
-			FlushInterval:  cfg.FlushInterval,
-			BufferCapacity: cfg.BufferCapacity,
-			MaxRetries:     cfg.FlushMaxRetries,
-			FlushTimeout:   cfg.Trino.QueryTimeout,
+			BatchSize:       cfg.BatchSize,
+			FlushInterval:   cfg.FlushInterval,
+			BufferCapacity:  cfg.BufferCapacity,
+			MaxRetries:      cfg.FlushMaxRetries,
+			FlushTimeout:    cfg.StoreQueryTimeout(),
+			RetryBackoff:    cfg.FlushRetryBackoff,
+			RetryMaxBackoff: cfg.FlushRetryMaxBackoff,
 		}, log, metrics)
 		metrics.SetBufferSource(func() observability.BufferStats {
 			depth, capacity, lastMs, durMs := buf.Stats()
@@ -169,7 +191,7 @@ func runServer(cfg *config.Config, log *slog.Logger, opts server.Options) error 
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      cfg.Trino.QueryTimeout + 15*time.Second,
+		WriteTimeout:      cfg.StoreQueryTimeout() + 15*time.Second,
 	}
 
 	serverErr := make(chan error, 1)
@@ -177,8 +199,8 @@ func runServer(cfg *config.Config, log *slog.Logger, opts server.Options) error 
 	log.Info("listening",
 		"addr", cfg.ListenAddr,
 		"roles", rolesLabel(opts),
-		"trino", fmt.Sprintf("%s:%d", cfg.Trino.Host, cfg.Trino.Port),
-		"table", fmt.Sprintf("%s.%s.%s", cfg.Trino.Catalog, cfg.Trino.Schema, cfg.Trino.Table))
+		"backend", cfg.StoreBackend,
+		"store", cfg.StoreTarget())
 
 	select {
 	case err := <-serverErr:
@@ -219,7 +241,7 @@ func rolesLabel(opts server.Options) string {
 }
 
 func initDDL(cfg *config.Config, log *slog.Logger) error {
-	st, err := store.New(cfg.Trino)
+	st, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -227,10 +249,8 @@ func initDDL(cfg *config.Config, log *slog.Logger) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	log.Info("applying DDL",
-		"catalog", cfg.Trino.Catalog, "schema", cfg.Trino.Schema, "table", cfg.Trino.Table,
-		"location", cfg.IcebergLocation)
-	if err := st.Init(ctx, cfg.IcebergLocation); err != nil {
+	log.Info("applying DDL", "backend", cfg.StoreBackend, "store", cfg.StoreTarget())
+	if err := st.Init(ctx); err != nil {
 		return err
 	}
 	log.Info("DDL applied")
@@ -238,7 +258,7 @@ func initDDL(cfg *config.Config, log *slog.Logger) error {
 }
 
 func runPrune(cfg *config.Config, log *slog.Logger) error {
-	st, err := store.New(cfg.Trino)
+	st, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -250,7 +270,11 @@ func runPrune(cfg *config.Config, log *slog.Logger) error {
 }
 
 func runMaintain(cfg *config.Config, log *slog.Logger) error {
-	st, err := store.New(cfg.Trino)
+	if cfg.StoreBackend != config.BackendTrino {
+		log.Info("maintain is a no-op for this backend", "backend", cfg.StoreBackend)
+		return nil
+	}
+	st, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -267,7 +291,11 @@ func runMaintain(cfg *config.Config, log *slog.Logger) error {
 }
 
 func runOptimize(cfg *config.Config, log *slog.Logger) error {
-	st, err := store.New(cfg.Trino)
+	if cfg.StoreBackend != config.BackendTrino {
+		log.Info("optimize is a no-op for this backend", "backend", cfg.StoreBackend)
+		return nil
+	}
+	st, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -296,11 +324,11 @@ func optimizeWindowStart(now time.Time, optimizeDaysIncludingToday int) time.Tim
 }
 
 func printDDL(cfg *config.Config) error {
-	st, err := store.New(cfg.Trino)
+	st, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	fmt.Print(st.DDLScript(cfg.IcebergLocation))
+	fmt.Print(st.DDLScript())
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 const (
 	apiDefaultLimit = 100
 	apiMaxLimit     = 500
+	apiMaxOffset    = 100_000
 )
 
 type listResponse struct {
@@ -85,7 +86,7 @@ func parseOffset(v string) int {
 	if err != nil || n < 0 {
 		return 0
 	}
-	return n
+	return min(n, apiMaxOffset)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

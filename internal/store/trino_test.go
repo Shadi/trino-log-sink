@@ -9,7 +9,7 @@ import (
 
 func newTestStore(t *testing.T) *TrinoStore {
 	t.Helper()
-	s, err := New(config.Trino{
+	s, err := NewTrino(config.Trino{
 		Host: "localhost", Port: 8080, User: "tester",
 		Source: "trino-query-log", Catalog: "gravitino", Schema: "observability", Table: "trino_query_log",
 	})
@@ -61,7 +61,8 @@ func TestScanDestsMatchArgsOrder(t *testing.T) {
 
 func TestDDLScript(t *testing.T) {
 	s := newTestStore(t)
-	script := s.DDLScript("gs://my-bucket/observability")
+	s.cfg.IcebergLocation = "gs://my-bucket/observability"
+	script := s.DDLScript()
 
 	for _, want := range []string{
 		`CREATE SCHEMA IF NOT EXISTS "gravitino"."observability"`,
@@ -82,8 +83,8 @@ func TestDDLScript(t *testing.T) {
 
 func TestSchemaDDLWithoutLocation(t *testing.T) {
 	s := newTestStore(t)
-	if strings.Contains(s.SchemaDDL(""), "location") {
-		t.Errorf("empty location should omit WITH clause: %s", s.SchemaDDL(""))
+	if strings.Contains(s.SchemaDDL(), "location") {
+		t.Errorf("empty location should omit WITH clause: %s", s.SchemaDDL())
 	}
 }
 

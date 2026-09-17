@@ -8,28 +8,45 @@ import (
 	"time"
 )
 
-// Store persists and reads back query-log rows. Writes and reads both go
-// through Trino.
+// Store persists and reads back query-log rows. Implementations are selected
+// by configuration (see Open) and must not be assumed to share a dialect.
 type Store interface {
-	// Validate confirms Trino is reachable, without reading the query log table.
+	// Validate confirms the backend is reachable, without reading the query log table.
 	Validate(ctx context.Context) error
 	// ValidateTable also confirms the query log table is readable.
 	ValidateTable(ctx context.Context) error
-	// InsertBatch writes rows using one or more multi-row INSERTs, splitting
-	// so each statement stays under the configured statement-size budget.
-	// Chunks are not atomic; a partial failure returns *PartialCommitError.
+	// InsertBatch writes rows in one or more backend-sized chunks. Chunks are
+	// not atomic with each other; a failure after at least one committed chunk
+	// returns *PartialCommitError, and deterministic failures wrap ErrNonRetryable.
 	InsertBatch(ctx context.Context, rows []Row) error
-	// ListQueries returns lightweight summaries matching the filter.
+	// ListQueries returns lightweight summaries matching the filter, or nil
+	// when nothing matches.
 	ListQueries(ctx context.Context, f QueryFilter) ([]QuerySummary, error)
 	// GetQuery returns the full row for a query id, or nil if not found.
 	GetQuery(ctx context.Context, queryID string) (*Row, error)
 	// Prune deletes rows whose create_time is strictly before olderThan.
+	// Backends that store data in whole-day units prune at UTC-day granularity;
+	// callers pass a midnight-aligned cutoff (see package prune).
 	Prune(ctx context.Context, olderThan time.Time) error
-	// Maintain reclaims space via Iceberg expire_snapshots + remove_orphan_files.
+	// Maintain reclaims space held by superseded data files and snapshots.
+	// Backends that reclaim space on their own return nil without doing anything.
 	Maintain(ctx context.Context, retentionThreshold string) error
 	// Optimize compacts data files whose create_time is at or after since.
+	// Backends that compact on their own return nil without doing anything.
 	Optimize(ctx context.Context, since time.Time) error
 	Close() error
+}
+
+// SchemaManager creates the backing schema and prints the DDL that does so.
+type SchemaManager interface {
+	Init(ctx context.Context) error
+	DDLScript() string
+}
+
+// Backend is what Open returns: a Store that can also create its own schema.
+type Backend interface {
+	Store
+	SchemaManager
 }
 
 type column struct {
